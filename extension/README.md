@@ -102,7 +102,7 @@ Configurable via `aiSetupSync.targetFolders` — add or remove any folder or fil
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `aiSetupSync.repository` | *(required)* | GitHub repository URL to sync from, e.g. `https://github.com/your-org/your-repo`. Private repos and SAML SSO org repos require a token — run **Set GitHub Token** from the command palette. |
+| `aiSetupSync.repository` | *(required)* | GitHub repository URL to sync from, e.g. `https://github.com/your-org/your-repo`. Private repos and SAML SSO org repos require a token with the **`repo`** scope — run **Set GitHub Token** from the command palette. |
 | `aiSetupSync.branch` | `main` | Branch to sync from. Set to `master` or any other branch name if your repo uses a different default. |
 | `aiSetupSync.targetFolders` | *(see above)* | Files and folders to sync from the repo root. Anything outside these paths is ignored. Add custom paths for any tool that reads config from your project. |
 | `aiSetupSync.pathMappings` | `{}` | Rename paths as files are synced from the repo to your project. `"Claude": ".claude"` rewrites `Claude/instructions/style.md` → `.claude/instructions/style.md`. More specific (longer) keys always win. |
@@ -125,6 +125,17 @@ On each sync the extension compares file content against what it last wrote:
   | Escape / close | Re-prompts on the next sync. |
 
 Files removed from the repo are reported but never deleted from disk.
+
+## Status bar
+
+Once installed, look for **AI Setup Sync** in the status bar at the very bottom of the VS Code window (right side). It shows sync state at a glance and clicking it triggers an immediate sync.
+
+| Indicator | Meaning |
+| --- | --- |
+| `✓ AI Setup Sync` | Up to date — last sync completed successfully. |
+| `⟳ AI Setup Sync` | Sync in progress. |
+| `⚠ AI Setup Sync` | Sync failed — hover to see the error, click to retry. |
+| `⚙ AI Setup Sync` | No repository configured — click to open settings. |
 
 ## Commands
 

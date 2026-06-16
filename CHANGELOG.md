@@ -6,6 +6,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.0.3] — 2026-06-16
+
+### Fixed
+
+- **Token error message** — invalid/expired token toast now reads "GitHub token is invalid or expired" with a direct action button, instead of telling the user to run a command manually.
+- **SSO toast** — org name is now shown in the SSO authorization message when available, instead of the generic "this organization".
+
+### Documentation
+
+- Added status bar section to README explaining the bottom-right indicator and all four states.
+- README settings table now consistently mentions the `repo` scope requirement.
+
+---
+
 ## [1.0.2] — 2026-06-16
 
 ### Fixed
