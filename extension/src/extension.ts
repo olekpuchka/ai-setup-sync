@@ -119,13 +119,14 @@ function handleSyncError(err: unknown, interactive: boolean): void {
       // SSO is a one-time auth action, not a rate limit — don't back off background syncs.
       setStatus("error", "SSO authorization required");
       if (interactive) {
-        void vscode.window
-          .showWarningMessage(msg, "Set GitHub Token")
-          .then((choice) => {
-            if (choice) {
-              void vscode.commands.executeCommand(`${CONFIG}.setGitHubToken`);
-            }
-          });
+        const buttons = err.ssoUrl ? ["Authorize SSO", "Set GitHub Token"] : ["Set GitHub Token"];
+        void vscode.window.showWarningMessage(msg, ...buttons).then((choice) => {
+          if (choice === "Authorize SSO" && err.ssoUrl) {
+            void vscode.env.openExternal(vscode.Uri.parse(err.ssoUrl));
+          } else if (choice === "Set GitHub Token") {
+            void vscode.commands.executeCommand(`${CONFIG}.setGitHubToken`);
+          }
+        });
       }
     } else {
       // Back off all background activity until the rate limit resets.
@@ -413,7 +414,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         title: "AI Setup Sync: Set GitHub Token",
         prompt: existing
           ? "A token is already saved. Enter a new one to replace it, or leave blank to remove it."
-          : "Enter a GitHub personal access token. Required for private repos and SAML SSO-protected org repos.",
+          : "Enter a GitHub personal access token with the 'repo' scope. Required for private repos and SAML SSO-protected org repos.",
         password: true,
         placeHolder: "ghp_... or github_pat_...",
       });

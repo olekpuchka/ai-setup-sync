@@ -45,11 +45,14 @@ export class RateLimitError extends Error {
   resetAt?: number;
   /** True when the 403 was caused by missing SAML SSO authorization (not a rate limit). */
   isSso?: boolean;
-  constructor(message: string, resetAt?: number, isSso?: boolean) {
+  /** Authorization URL from X-GitHub-SSO header, when isSso is true. */
+  ssoUrl?: string;
+  constructor(message: string, resetAt?: number, isSso?: boolean, ssoUrl?: string) {
     super(message);
     this.name = "RateLimitError";
     this.resetAt = resetAt;
     this.isSso = isSso;
+    this.ssoUrl = ssoUrl;
   }
 }
 
@@ -114,11 +117,11 @@ function rateLimitError(
   const sso = headers["x-github-sso"];
   if (sso) {
     const ssoUrl = String(sso).match(/url=(\S+)/)?.[1];
-    const hint = ssoUrl ? ` Then authorize it for SSO at: ${ssoUrl}` : "";
     return new RateLimitError(
-      `GitHub SSO authorization required — set a personal access token and authorize it for your organization.${hint}`,
+      `GitHub SSO authorization required — authorize your token for this organization.`,
       undefined,
-      true
+      true,
+      ssoUrl
     );
   }
   const reset = Number(headers["x-ratelimit-reset"]);
@@ -166,6 +169,9 @@ async function getJson(
       `The repository may have been renamed or moved. Update the repository URL in extension settings.`
     );
   }
+  if (status === 401) {
+    throw new ConfigError(`Invalid GitHub token. Update it via the "Set GitHub Token" command.`, true);
+  }
   if (status === 403 || status === 429) {
     throw rateLimitError(headers);
   }
@@ -176,7 +182,7 @@ async function getJson(
         true
       );
     }
-    throw new ConfigError(`Repository not found. Check the repository URL in extension settings.`);
+    throw new ConfigError(`Repository not found. Check the repository URL in extension settings, and verify your token has the \`repo\` scope.`);
   }
   if (status < 200 || status >= 300) {
     throw new Error(`GitHub API returned HTTP ${status} for ${url}`);

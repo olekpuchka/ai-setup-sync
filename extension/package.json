@@ -2,7 +2,7 @@
   "name": "ai-setup-sync",
   "displayName": "AI Setup Sync",
   "description": "Syncs shared AI setup files — Claude Code, GitHub Copilot, Cursor, Google Antigravity 2.0, OpenAI Codex and more — from a GitHub repository into your project, and keeps them current automatically.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "olekpuchka",
   "author": {
     "name": "Olek Puchka"
@@ -73,7 +73,7 @@
           "order": 1,
           "type": "string",
           "default": "",
-          "markdownDescription": "GitHub repository URL to sync setup files from, e.g. `https://github.com/your-org/your-repo`. Private repos and SAML SSO org repos require a token — [Set GitHub Token](command:aiSetupSync.setGitHubToken)."
+          "markdownDescription": "GitHub repository URL to sync setup files from, e.g. `https://github.com/your-org/your-repo`. Private repos and SAML SSO org repos require a token with the `repo` scope — [Set GitHub Token](command:aiSetupSync.setGitHubToken)."
         },
         "aiSetupSync.branch": {
           "order": 2,

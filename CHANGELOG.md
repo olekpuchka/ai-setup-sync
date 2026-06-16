@@ -6,6 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.0.2] — 2026-06-16
+
+### Fixed
+
+- **401 handling** — invalid or expired tokens now show a **"Set GitHub Token"** button instead of a raw API error message.
+- **SSO toast** — when GitHub SSO authorization is required, the error toast now shows an **"Authorize SSO"** button that opens the GitHub authorization page directly in the browser.
+- **404 with token** — error message now also hints to verify the token has the `repo` scope, not just the URL.
+- **Token input** — the "Set GitHub Token" prompt now mentions the required `repo` scope.
+- **Settings description** — the repository setting description now mentions the `repo` scope requirement.
+
+---
+
 ## [1.0.1] — 2026-06-16
 
 ### Fixed
