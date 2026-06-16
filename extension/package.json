@@ -29,7 +29,11 @@
     "codex",
     "antigravity",
     "sync",
-    "setup"
+    "setup",
+    "ai config",
+    "ai instructions",
+    "dotfiles",
+    "team"
   ],
   "repository": {
     "type": "git",
