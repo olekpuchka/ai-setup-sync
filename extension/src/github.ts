@@ -117,8 +117,10 @@ function rateLimitError(
   const sso = headers["x-github-sso"];
   if (sso) {
     const ssoUrl = String(sso).match(/url=(\S+)/)?.[1];
+    const org = ssoUrl?.match(/\/orgs\/([^/]+)\/sso/)?.[1];
+    const orgHint = org ? ` for the "${org}" organization` : ` for this organization`;
     return new RateLimitError(
-      `GitHub SSO authorization required — authorize your token for this organization.`,
+      `GitHub SSO authorization required — authorize your token${orgHint}.`,
       undefined,
       true,
       ssoUrl
@@ -170,7 +172,7 @@ async function getJson(
     );
   }
   if (status === 401) {
-    throw new ConfigError(`Invalid GitHub token. Update it via the "Set GitHub Token" command.`, true);
+    throw new ConfigError(`GitHub token is invalid or expired.`, true);
   }
   if (status === 403 || status === 429) {
     throw rateLimitError(headers);
