@@ -6,6 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.0.7] — 2026-06-17
+
+### Fixed
+
+- **Target folders restore** — files under a folder disabled in `targetFolders` (e.g. `".claude": false`) are no longer restored after local deletion. Previously the 304 restore path skipped the `targetFolders` check and pulled them back.
+- **Misleading "removed upstream" log** — files excluded by `targetFolders` changes no longer appear as "removed in repo" in sync logs. They are now silently dropped from state on the next full tree fetch.
+
+---
+
 ## [1.0.6] — 2026-06-17
 
 ### Fixed

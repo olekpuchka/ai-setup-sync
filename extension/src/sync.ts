@@ -154,6 +154,9 @@ export async function syncFolder(
     const acknowledged = state.acknowledged ?? {};
     const locallyModified: PlannedFile[] = [];
     for (const [repoPath, lastSyncedSha] of Object.entries(state.files)) {
+      if (!isSyncable(repoPath, targetFolders, pathMappings)) {
+        continue;
+      }
       const localPath = toLocalPath(repoPath, sortedMappings);
       validateLocalPath(localPath);
       const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, localPath);
@@ -295,8 +298,11 @@ export async function syncFolder(
   );
 
   // Files that are removed from the repo but were previously synced by us.
+  const allRepoPaths = new Set(tree.entries.map((e) => e.path));
   const remotePaths = new Set(entries.map((e) => e.path));
-  const removedInRepo = Object.keys(state.files).filter((p) => !remotePaths.has(p));
+  const removedInRepo = Object.keys(state.files).filter((p) => !remotePaths.has(p) && !allRepoPaths.has(p));
+  // Previously synced files still in the repo but now excluded by targetFolders/pathMappings — silently drop from state.
+  const excludedBySettings = Object.keys(state.files).filter((p) => !remotePaths.has(p) && allRepoPaths.has(p));
 
   const result: SyncResult = {
     added: 0,
@@ -352,8 +358,8 @@ export async function syncFolder(
     syncError = err;
   }
 
-  // Forget removed files in our state (we don't delete them from disk).
-  for (const p of removedInRepo) {
+  // Forget removed and excluded files in our state (we don't delete them from disk).
+  for (const p of [...removedInRepo, ...excludedBySettings]) {
     delete newState.files[p];
   }
 
