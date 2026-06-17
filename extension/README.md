@@ -96,7 +96,7 @@ By default, the extension syncs these paths from the `main` branch (configurable
 | `GEMINI.md` | Gemini CLI |
 | `.codex` | OpenAI Codex |
 
-Configurable via `aiSetupSync.targetFolders` — add or remove any folder or file.
+Configurable via `aiSetupSync.targetFolders` — toggle defaults on or off, or add custom paths.
 
 > **Private and SSO-protected repositories** require a GitHub personal access token with the **`repo`** scope — [create one here](https://github.com/settings/tokens/new). Run
 > **AI Setup Sync: Set GitHub Token** from the command palette to store it securely in the
@@ -109,7 +109,7 @@ Configurable via `aiSetupSync.targetFolders` — add or remove any folder or fil
 | --- | --- | --- |
 | `aiSetupSync.repository` | *(required)* | GitHub repository URL to sync from, e.g. `https://github.com/your-org/your-repo`. Private repos and SAML SSO org repos require a token with the **`repo`** scope — run **Set GitHub Token** from the command palette. |
 | `aiSetupSync.branch` | `main` | Branch to sync from. Set to `master` or any other branch name if your repo uses a different default. |
-| `aiSetupSync.targetFolders` | *(see above)* | Files and folders to sync from the repo root. Anything outside these paths is ignored. Add custom paths for any tool that reads config from your project. |
+| `aiSetupSync.targetFolders` | *(see above)* | Files and folders to sync from the repo root. Each entry can be toggled on or off — set to `false` to disable a default without removing it. Add new entries for any tool that reads config from your project. |
 | `aiSetupSync.pathMappings` | `{}` | Rename paths as files are synced from the repo to your project. `"Claude": ".claude"` rewrites `Claude/instructions/style.md` → `.claude/instructions/style.md`. More specific (longer) keys always win. |
 | `aiSetupSync.conflictPolicy` | `prompt` | How to handle files you've edited locally that differ from the repository version. `prompt` — ask per file, with a *Show diff* button. `overwrite` — always replace. `skip` — never touch local edits. |
 | `aiSetupSync.syncMode` | `always` | When to sync automatically. `always` — on open + daily background check. `onOpen` — on open only. `manual` — only when you run *Sync Now*. |

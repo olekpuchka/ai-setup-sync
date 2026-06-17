@@ -6,6 +6,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.0.5] — 2026-06-17
+
+### Changed
+
+- **Target folders toggles** — `aiSetupSync.targetFolders` is now an object (`path → true/false`) instead of a string array. Each default path can be toggled on or off directly in the VS Code settings UI without editing JSON. Custom paths can be added via the "Add Item" button. Existing configurations using the old array format will fall back to defaults.
+
+---
+
 ## [1.0.4] — 2026-06-16
 
 ### Added

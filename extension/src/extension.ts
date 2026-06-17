@@ -78,8 +78,9 @@ interface Settings {
 
 function readSettings(): Settings {
   const c = vscode.workspace.getConfiguration(CONFIG);
-  const raw = c.get<string[]>("targetFolders");
-  const targetFolders = Array.isArray(raw) && raw.length > 0 ? raw : DEFAULT_TARGET_FOLDERS;
+  const raw = c.get<Record<string, boolean>>("targetFolders");
+  const enabled = raw && typeof raw === "object" ? Object.entries(raw).filter(([, on]) => on).map(([f]) => f) : [];
+  const targetFolders = enabled.length > 0 ? enabled : DEFAULT_TARGET_FOLDERS;
   // Normalize trailing slashes on both keys and values to prevent silent mismatches.
   const rawMappings = c.get<Record<string, string>>("pathMappings") ?? {};
   const pathMappings: Record<string, string> = {};
