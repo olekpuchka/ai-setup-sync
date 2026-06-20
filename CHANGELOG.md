@@ -6,6 +6,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.0] — 2026-06-20
+
+### Changed
+
+- **Sync now deletes files removed from the repo** — when a file (e.g. a Claude skill) is deleted from the shared repository, it is deleted from your local project on the next sync. Unmodified files are removed silently. Files you've edited locally are handled per `aiSetupSync.conflictPolicy`: `prompt` asks before deleting, `overwrite` deletes without asking, `skip` keeps them on disk. The sync summary now includes a deletion count, e.g. `"1 added, 2 updated, 1 deleted"`.
+- **Empty directories removed after file deletions** — when all files in a folder are deleted from the repo, the now-empty directory is removed from your project automatically. Works recursively — only folders that become fully empty are removed.
+- **Faster syncs** — increased concurrent file operations from 5 to 20 for network downloads and 50 for local disk reads, reducing sync time for repos with many files.
+- **Diff review** — after clicking *Show diff* in the conflict dialog, a quick pick now appears alongside the open diff tab so you can review and decide without the editor being blocked.
+- **Sync notifications** — the toast now shows only non-zero counts (e.g. `"1 added"` instead of `"1 added, 0 updated"`). A **Show details** button opens the output panel with a grouped per-file log.
+
+### Fixed
+
+- **Branch not found error** — when `aiSetupSync.branch` points to a non-existent branch, the error now clearly says which branch is missing and the *Open settings* button lands on the branch setting. Previously showed a generic "Repository not found" message.
+- **Wrong repo URL vs branch** — the extension now distinguishes between a missing repo, a missing branch, and a missing token, showing the appropriate message and button for each.
+- **Rate limit error masked branch-not-found** — when the branch name is wrong and GitHub is simultaneously rate-limited, the error incorrectly showed a rate limit warning instead of a branch-not-found message.
+- **Overwrite ignored with pathMappings on 304 sync** — choosing "Overwrite" for a conflict during a 304 (unchanged repo) sync had no effect when `pathMappings` were configured; files were silently kept instead of overwritten.
+- **Delete review Escape counted as "Keep"** — pressing Escape in the per-file delete dialog incorrectly incremented the "kept on disk" counter and logged keep entries for unreviewed files. Escape now correctly leaves those files for re-prompt on the next sync with no count recorded.
+- **"Kept on disk" toast missing** — when the user chose Keep for a file deleted from the repo, no sync notification was shown. The toast now correctly fires.
+- **Delete review Escape permanently silenced the dialog** — pressing Escape in the per-file "Delete or keep?" dialog suppressed re-prompting on future syncs. It now correctly re-prompts on the next sync, consistent with update conflict Escape behavior.
+- **Single-file delete conflict showed redundant batch dialog** — a single locally-edited file removed from the repo prompted a "Delete all / Keep all / Review each" batch modal before the per-file choice. Now goes directly to per-file, matching how single update conflicts work.
+- **"Up to date" count inflated in cached syncs** — when some tracked files were excluded by `targetFolders` or `pathMappings` settings, the "N up to date" count in the sync log was over-reported by the number of excluded files.
+- **Failed file delete silently dropped from tracking** — if deleting a file from disk failed (e.g. permission error), the file was removed from sync state anyway, so the extension would never retry. The file now stays tracked and is retried on the next sync.
+- **Spurious "." in multi-folder toast** — when one workspace folder had no changes, its result contributed a bare `"."` to the shared toast message (e.g. `"1 added. ."`).
+
+### Documentation
+
+- GitHub token guidance now specifies **classic** personal access tokens (fine-grained tokens don't support the `repo` scope) across the README, settings description, and token input prompt.
+
+---
+
 ## [1.0.8] — 2026-06-18
 
 ### Fixed

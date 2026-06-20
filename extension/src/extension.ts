@@ -1,10 +1,10 @@
 import * as vscode from "vscode";
 import { forceRemoveFiles, removeManagedFiles } from "./cleanup";
 import { ConfigError, RateLimitError, RepoRef } from "./github";
-import { initOutput, log } from "./output";
+import { initOutput, log, showOutput } from "./output";
 import { readRegistry, setWorkspaceFiles } from "./registry";
 import { getState, saveState } from "./state";
-import { ConflictPolicy, summarize, syncFolder, SyncResult } from "./sync";
+import { ConflictPolicy, toastSummary, syncFolder, SyncResult } from "./sync";
 import { REMOTE_SCHEME, remoteContentProvider } from "./remoteContent";
 import { deleteToken, getToken, setToken } from "./token";
 
@@ -159,7 +159,7 @@ function handleSyncError(err: unknown, interactive: boolean): void {
       } else {
         void vscode.window.showErrorMessage(`AI Setup Sync: ${msg}`, "Open settings").then((choice) => {
           if (choice) {
-            void vscode.commands.executeCommand("workbench.action.openSettings", `${CONFIG}.repository`);
+            void vscode.commands.executeCommand("workbench.action.openSettings", err.setting ?? `${CONFIG}.repository`);
           }
         });
       }
@@ -221,9 +221,7 @@ async function runSync(
   const token = await getToken(context);
   const repoRef: RepoRef = { repo: parseRepo(settings.repository) ?? "", url: settings.repository, ref: settings.branch, token };
 
-  const noopProgress = { report: (_: { message?: string; increment?: number }) => {} };
-
-  const runSyncFolders = async (progress: vscode.Progress<{ message?: string; increment?: number }>) => {
+  const runSyncFolders = async () => {
     const summaries: string[] = [];
     let changed = false;
     let noFilesFound = false;
@@ -259,8 +257,7 @@ async function runSync(
             targetFolders: settings.targetFolders,
             pathMappings: settings.pathMappings,
             conflictPolicy: settings.conflictPolicy,
-          },
-          progress
+          }
         );
       } catch (err) {
         handleSyncError(err, interactive);
@@ -271,8 +268,8 @@ async function runSync(
       } else {
         if (!result.noChanges) {
           changed = true;
+          summaries.push(toastSummary(result));
         }
-        summaries.push(summarize(folder.name, result));
       }
     }
 
@@ -290,26 +287,20 @@ async function runSync(
       });
     } else if (changed && summaries.length > 0) {
       void vscode.window.showInformationMessage(
-        `AI Setup Sync: ${summaries.join(" ")}`
-      );
+        `AI Setup Sync: ${summaries.join(" ")}`,
+        "Show details"
+      ).then((choice) => {
+        if (choice === "Show details") {
+          showOutput();
+        }
+      });
     }
   };
 
   syncing = true;
   setStatus("syncing");
   try {
-    if (interactive) {
-      await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: "AI Setup Sync",
-          cancellable: false,
-        },
-        runSyncFolders
-      );
-    } else {
-      await runSyncFolders(noopProgress);
-    }
+    await runSyncFolders();
   } finally {
     syncing = false;
   }
@@ -416,7 +407,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         title: "AI Setup Sync: Set GitHub Token",
         prompt: existing
           ? "A token is already saved. Enter a new one to replace it, or leave blank to remove it."
-          : "Enter a GitHub personal access token with the 'repo' scope. Required for private repos and SAML SSO-protected org repos.",
+          : "Enter a classic GitHub personal access token with the 'repo' scope (fine-grained tokens don't support this scope). Required for private repos and SAML SSO-protected org repos.",
         password: true,
         placeHolder: "ghp_... or github_pat_...",
       });

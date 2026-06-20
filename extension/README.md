@@ -23,7 +23,7 @@ detects conflicts and lets them choose what to keep.
 - **Configurable branch** — sync from `main`, `master`, or any branch your repo uses.
 - **Git exclude** — synced files are silently added to `.git/info/exclude` so they never appear as pending changes.
 - **Private & SSO repos** — GitHub token stored securely in the OS keychain (VS Code SecretStorage).
-- **Non-destructive** — files removed from the repo are never deleted from disk; local edits are always preserved on removal.
+- **Safe deletions** — files removed from the repo are deleted locally on the next sync. Unmodified files are removed silently; files you've edited locally are handled per `aiSetupSync.conflictPolicy`. Directories that become empty after file deletions are removed automatically.
 
 ## Quick start
 
@@ -74,7 +74,7 @@ The extension syncs from any GitHub repository you own. Here's how to set one up
    }
    ```
    `Claude/instructions/style.md` → `.claude/instructions/style.md`, and so on.
-4. If your repo is private or behind SAML SSO, run **AI Setup Sync: Set GitHub Token** from the command palette. [Create a GitHub personal access token](https://github.com/settings/tokens/new) with the **`repo`** scope, then — for SAML SSO orgs — authorize it for your org on GitHub (*Settings → Personal access tokens → Configure SSO → Authorize*).
+4. If your repo is private or behind SAML SSO, run **AI Setup Sync: Set GitHub Token** from the command palette. [Create a **classic** personal access token](https://github.com/settings/tokens/new) with the **`repo`** scope (fine-grained tokens don't support this scope), then — for SAML SSO orgs — authorize it for your org on GitHub (*Settings → Personal access tokens → Configure SSO → Authorize*).
 5. If your default branch is not `main`, set `aiSetupSync.branch` to match (e.g. `master`).
 6. Push changes to your branch — every project syncs automatically on the next open or background check.
 
@@ -98,7 +98,7 @@ By default, the extension syncs these paths from the `main` branch (configurable
 
 Configurable via `aiSetupSync.targetFolders` — toggle defaults on or off, or add custom paths.
 
-> **Private and SSO-protected repositories** require a GitHub personal access token with the **`repo`** scope — [create one here](https://github.com/settings/tokens/new). Run
+> **Private and SSO-protected repositories** require a **classic** GitHub personal access token with the **`repo`** scope — [create one here](https://github.com/settings/tokens/new) (fine-grained tokens don't support this scope). Run
 > **AI Setup Sync: Set GitHub Token** from the command palette to store it securely in the
 > OS keychain. For SAML SSO repos, also authorize the token for your organisation in GitHub:
 > *Settings → Personal access tokens → Configure SSO → Authorize*.
@@ -107,7 +107,7 @@ Configurable via `aiSetupSync.targetFolders` — toggle defaults on or off, or a
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `aiSetupSync.repository` | *(required)* | GitHub repository URL to sync from, e.g. `https://github.com/your-org/your-repo`. Private repos and SAML SSO org repos require a token with the **`repo`** scope — run **Set GitHub Token** from the command palette. |
+| `aiSetupSync.repository` | *(required)* | GitHub repository URL to sync from, e.g. `https://github.com/your-org/your-repo`. Private repos and SAML SSO org repos require a **classic** personal access token with the **`repo`** scope — run **Set GitHub Token** from the command palette. |
 | `aiSetupSync.branch` | `main` | Branch to sync from. Set to `master` or any other branch name if your repo uses a different default. |
 | `aiSetupSync.targetFolders` | *(see above)* | Files and folders to sync from the repo root. Each entry can be toggled on or off — set to `false` to disable a default without removing it. Add new entries for any tool that reads config from your project. |
 | `aiSetupSync.pathMappings` | `{}` | Rename paths as files are synced from the repo to your project. `"Claude": ".claude"` rewrites `Claude/instructions/style.md` → `.claude/instructions/style.md`. More specific (longer) keys always win. |
@@ -164,17 +164,17 @@ To switch platforms, update the mapping keys (e.g. replace `PlatformA` with `Pla
 On each sync the extension compares file content against what it last wrote:
 
 - **Unmodified** → updated silently.
-- **Deleted locally** → restored automatically.
+- **Deleted locally** → re-added automatically.
 - **Edited locally** → handled per `aiSetupSync.conflictPolicy`. With `prompt` (default):
 
   | Choice | Effect |
   | --- | --- |
-  | *Overwrite all* | Replace with repo version. |
+  | *Overwrite all* | Replace with repo version. (Shown when multiple files conflict; for a single file, the per-file dialog appears directly.) |
   | *Keep all mine* | Leave your edits; won't re-prompt while your local version stays unchanged. |
   | *Review each* | Decide file by file — each dialog has a *Show diff* button to compare local vs. repository before choosing. |
   | Escape / close | Re-prompts on the next sync. |
 
-Files removed from the repo are reported but never deleted from disk.
+**Files removed from the repo** are deleted from your project on the next sync. Unmodified files are removed silently. Files you've edited locally follow `aiSetupSync.conflictPolicy` — with `prompt` you'll be asked before deletion (Escape re-prompts on the next sync), with `skip` they are kept on disk. Directories that become empty after file deletions are removed automatically.
 
 ## Status bar
 
@@ -194,7 +194,7 @@ All commands are under the **AI Setup Sync** category in the command palette (`C
 - **Sync Now** — sync immediately.
 - **Remove Synced Files** — delete synced files from the project (local edits are preserved).
 - **Open Settings** — jump to extension settings.
-- **Set GitHub Token** — securely store a GitHub personal access token in the OS keychain (required for private repos and SAML SSO org repos). The token needs the **`repo`** scope; for SAML SSO orgs, also authorize it via *Settings → Personal access tokens → Configure SSO*. Submit empty to clear.
+- **Set GitHub Token** — securely store a GitHub personal access token in the OS keychain (required for private repos and SAML SSO org repos). Use a **classic** token with the **`repo`** scope (fine-grained tokens don't support this scope); for SAML SSO orgs, also authorize it via *Settings → Personal access tokens → Configure SSO*. Submit empty to clear.
 
 Activity is logged to the **AI Setup Sync** output channel (Output panel → dropdown).
 

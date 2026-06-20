@@ -7,6 +7,9 @@ import { setWorkspaceFiles } from "./registry";
 import { log } from "./output";
 import { cacheRemoteContent, clearRemoteContent, remoteDocUri } from "./remoteContent";
 
+const DOWNLOAD_CONCURRENCY = 20; // GitHub fetch + local write
+const DISK_CONCURRENCY = 50;     // local read/delete only
+
 /** Runs `fn` over `items` with at most `limit` concurrent executions. Throws if any item fails. */
 async function parallelLimit<T>(
   items: T[],
@@ -47,7 +50,9 @@ export interface SyncResult {
   updated: number;
   skipped: number;
   upToDate: number;
-  removedInRepo: string[];
+  deleted: number;
+  /** Locally-edited files that were removed from the repo but kept on disk (per conflictPolicy). */
+  keptDeleted: number;
   /** True if nothing on disk changed (used to keep auto-sync quiet). */
   noChanges: boolean;
   /** True when the tree was fetched but no files matched the configured paths — likely a wrong branch or targetFolders. */
@@ -133,15 +138,13 @@ interface PlannedFile {
 export async function syncFolder(
   context: vscode.ExtensionContext,
   workspaceFolder: vscode.WorkspaceFolder,
-  options: SyncOptions,
-  progress?: vscode.Progress<{ message?: string; increment?: number }>
+  options: SyncOptions
 ): Promise<SyncResult> {
   const { repoRef, targetFolders, pathMappings, conflictPolicy } = options;
   // Sort once so every toLocalPath call in this sync run shares the same order.
   const sortedMappings: [string, string][] = Object.entries(pathMappings).sort((a, b) => b[0].length - a[0].length);
   const state = getState(context, workspaceFolder);
 
-  progress?.report({ message: "Checking for updates…" });
   const tree = await getTree(repoRef, state.treeEtag);
 
   // Cheap short-circuit: a 304 means the repo tree is byte-identical to the last
@@ -150,19 +153,21 @@ export async function syncFolder(
   // edited locally without the repo changing (prompt if conflictPolicy allows).
   if (tree.notModified) {
     // One pass: detect missing and locally-modified files simultaneously (OPT-1).
-    const missing: string[] = [];
+    const missing: { repoPath: string; localPath: string }[] = [];
     const acknowledged = state.acknowledged ?? {};
     const locallyModified: PlannedFile[] = [];
+    let syncableCount = 0;
     for (const [repoPath, lastSyncedSha] of Object.entries(state.files)) {
       if (!isSyncable(repoPath, targetFolders, pathMappings)) {
         continue;
       }
+      syncableCount++;
       const localPath = toLocalPath(repoPath, sortedMappings);
       validateLocalPath(localPath);
       const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, localPath);
       const onDisk = await readIfExists(fileUri);
       if (!onDisk) {
-        missing.push(repoPath);
+        missing.push({ repoPath, localPath });
         continue;
       }
       const localSha = gitBlobSha(onDisk);
@@ -173,19 +178,16 @@ export async function syncFolder(
     }
 
     // Restore missing files (re-fetch from raw — no API cost).
-    let restored = 0;
+    let addedCount = 0;
     if (missing.length > 0) {
-      await parallelLimit(missing, 5, async (repoPath) => {
-        const localPath = toLocalPath(repoPath, sortedMappings);
-        validateLocalPath(localPath);
-        progress?.report({ message: `Restoring ${localPath}…` });
+      await parallelLimit(missing, DOWNLOAD_CONCURRENCY, async ({ repoPath, localPath }) => {
         const bytes = await getRawFile(repoRef, repoPath);
         const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, localPath);
         const parentUri = vscode.Uri.joinPath(fileUri, "..");
         await vscode.workspace.fs.createDirectory(parentUri);
         await vscode.workspace.fs.writeFile(fileUri, bytes);
       });
-      restored = missing.length;
+      addedCount = missing.length;
       // Keep registry + gitignore in sync after restore.
       try {
         const localFiles: Record<string, string> = {};
@@ -203,29 +205,32 @@ export async function syncFolder(
 
     let newAcknowledged = { ...acknowledged };
     let wasDismissed = false;
-    let overwrittenCount = 0;
+    let updatedCount = 0;
+    let toOverwrite: typeof locallyModified = [];
+    let toKeep: typeof locallyModified = [];
 
     if (locallyModified.length > 0) {
       const resolution = await resolveConflicts(locallyModified, conflictPolicy, repoRef, workspaceFolder);
       wasDismissed = resolution.wasDismissed;
 
+      toOverwrite = locallyModified.filter((p) => resolution.shouldOverwrite(p.localPath));
+      toKeep = locallyModified.filter((p) => !resolution.shouldOverwrite(p.localPath));
+
+      // Always write files the user approved, even if they escaped on a later file.
+      await parallelLimit(toOverwrite, DOWNLOAD_CONCURRENCY, async (p) => {
+        const bytes = await getRawFile(repoRef, p.entry.path);
+        const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, p.localPath);
+        const parentUri = vscode.Uri.joinPath(fileUri, "..");
+        await vscode.workspace.fs.createDirectory(parentUri);
+        await vscode.workspace.fs.writeFile(fileUri, bytes);
+        delete newAcknowledged[p.entry.path];
+      });
+      updatedCount = toOverwrite.length;
+
+      // Only acknowledge "kept" files when the review was completed — if dismissed
+      // mid-review we can't tell "Keep mine" from "Escaped", so let treeEtag=undefined
+      // cause a re-prompt next sync for the unresolved files.
       if (!wasDismissed) {
-        const toRestore = locallyModified.filter((p) => resolution.shouldOverwrite(p.entry.path));
-        const toKeep = locallyModified.filter((p) => !resolution.shouldOverwrite(p.entry.path));
-
-        await parallelLimit(toRestore, 5, async (p) => {
-          progress?.report({ message: `Restoring ${p.localPath}…` });
-          const bytes = await getRawFile(repoRef, p.entry.path);
-          const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, p.localPath);
-          const parentUri = vscode.Uri.joinPath(fileUri, "..");
-          await vscode.workspace.fs.createDirectory(parentUri);
-          await vscode.workspace.fs.writeFile(fileUri, bytes);
-          delete newAcknowledged[p.entry.path];
-        });
-        overwrittenCount = toRestore.length;
-
-        // Record "Keep all mine" at the current local SHA so we don't re-prompt
-        // unless the file changes again.
         for (const p of toKeep) {
           const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, p.localPath);
           const onDisk = await readIfExists(fileUri);
@@ -246,20 +251,33 @@ export async function syncFolder(
       await saveState(context, workspaceFolder, newState);
     }
 
-    log(
-      restored > 0 || overwrittenCount > 0
-        ? `${workspaceFolder.name}: 304, restored ${restored} missing + ${overwrittenCount} overwritten.`
-        : `${workspaceFolder.name}: up to date (304, no changes).`
-    );
-    return {
-      added: restored,
-      updated: overwrittenCount,
-      skipped: locallyModified.length - overwrittenCount,
-      upToDate: Object.keys(state.files).length - restored - locallyModified.length,
-      removedInRepo: [],
-      noChanges: restored === 0 && overwrittenCount === 0,
+    const fileLog304: string[] = [];
+    for (const { localPath } of missing) {
+      fileLog304.push(`  ${localPath} (added)`);
+    }
+    for (const p of toOverwrite) {
+      fileLog304.push(`  ${p.localPath} (updated)`);
+    }
+    if (!wasDismissed) {
+      for (const p of toKeep) {
+        fileLog304.push(`  ${p.localPath} (kept — your edits)`);
+      }
+    }
+    const result304: SyncResult = {
+      added: addedCount,
+      updated: updatedCount,
+      skipped: wasDismissed ? 0 : toKeep.length,
+      upToDate: syncableCount - addedCount - locallyModified.length,
+      deleted: 0,
+      keptDeleted: 0,
+      noChanges: addedCount === 0 && updatedCount === 0,
       noFilesFound: false,
     };
+    if (fileLog304.length > 0) {
+      log(summarize(workspaceFolder.name, result304).replace(/\.$/, ":"));
+      fileLog304.forEach((line) => log(line));
+    }
+    return result304;
   }
 
   const entries = tree.entries.filter((e) => isSyncable(e.path, targetFolders, pathMappings));
@@ -315,7 +333,8 @@ export async function syncFolder(
     updated: 0,
     skipped: 0,
     upToDate: 0,
-    removedInRepo,
+    deleted: 0,
+    keptDeleted: 0,
     noChanges: true,
     noFilesFound: entries.length === 0,
   };
@@ -329,13 +348,17 @@ export async function syncFolder(
     files: { ...state.files },
   };
 
+  const fileLog: string[] = [];
   const toWrite: PlannedFile[] = [];
   for (const p of planned) {
     if (p.classification === "up-to-date") {
       result.upToDate++;
       newState.files[p.entry.path] = p.entry.sha;
     } else if (p.classification === "conflict" && !overwriteConflict(p.localPath)) {
-      result.skipped++;
+      if (!wasDismissed) {
+        result.skipped++;
+        fileLog.push(`  ${p.localPath} (kept — your edits)`);
+      }
       newState.files[p.entry.path] = p.entry.sha;
     } else {
       toWrite.push(p);
@@ -345,8 +368,7 @@ export async function syncFolder(
   // Write files; save state even on partial failure so progress is not lost (BUG-4).
   let syncError: unknown;
   try {
-    await parallelLimit(toWrite, 5, async (p) => {
-      progress?.report({ message: `Syncing ${p.localPath}…` });
+    await parallelLimit(toWrite, DOWNLOAD_CONCURRENCY, async (p) => {
       const bytes = await getRawFile(repoRef, p.entry.path);
       const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, p.localPath);
       const parentUri = vscode.Uri.joinPath(fileUri, "..");
@@ -356,24 +378,119 @@ export async function syncFolder(
       newState.files[p.entry.path] = p.entry.sha;
       if (p.classification === "new") {
         result.added++;
+        fileLog.push(`  ${p.localPath} (added)`);
       } else {
         result.updated++;
+        fileLog.push(`  ${p.localPath} (updated)`);
       }
     });
   } catch (err) {
     syncError = err;
   }
 
-  // Forget removed and excluded files in our state (we don't delete them from disk).
-  for (const p of [...removedInRepo, ...excludedBySettings]) {
+  // Forget excluded files in our state (disabled via targetFolders/pathMappings — not deleted from disk).
+  for (const p of excludedBySettings) {
     delete newState.files[p];
   }
 
-  // If the user dismissed the conflict prompt (Escape/X) without making a
+  // Delete files removed from the repo. Unmodified files are deleted silently;
+  // locally-edited ones are handled per conflictPolicy.
+  let deleteWasDismissed = false;
+  if (removedInRepo.length > 0) {
+    type RemovedEntry = { repoPath: string; localPath: string };
+    const safeToDelete: RemovedEntry[] = [];
+    const editedAndRemoved: RemovedEntry[] = [];
+
+    await parallelLimit(removedInRepo, DISK_CONCURRENCY, async (repoPath) => {
+      const localPath = toLocalPath(repoPath, sortedMappings);
+      validateLocalPath(localPath);
+      const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, localPath);
+      const onDisk = await readIfExists(fileUri);
+      if (!onDisk) {
+        // Already gone — just drop from state, nothing to delete.
+        delete newState.files[repoPath];
+        return;
+      }
+      const localSha = gitBlobSha(onDisk);
+      if (localSha === state.files[repoPath]) {
+        safeToDelete.push({ repoPath, localPath });
+      } else {
+        editedAndRemoved.push({ repoPath, localPath });
+      }
+    });
+
+    const editedLocalPaths = editedAndRemoved.map(({ localPath }) => localPath);
+    const deleteResolution = await resolveDeleteConflicts(editedLocalPaths, conflictPolicy);
+    deleteWasDismissed = deleteResolution.wasDismissed;
+
+    const deletedLocalPaths: string[] = [];
+
+    for (const { repoPath, localPath } of safeToDelete) {
+      const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, localPath);
+      try {
+        await vscode.workspace.fs.delete(fileUri, { useTrash: false });
+        result.deleted++;
+        fileLog.push(`  ${localPath} (deleted)`);
+        delete newState.files[repoPath];
+        deletedLocalPaths.push(localPath);
+      } catch (err) {
+        log(`Warning: could not delete ${localPath}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    for (const { repoPath, localPath } of editedAndRemoved) {
+      if (deleteResolution.shouldDelete(localPath)) {
+        const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, localPath);
+        try {
+          await vscode.workspace.fs.delete(fileUri, { useTrash: false });
+          result.deleted++;
+          fileLog.push(`  ${localPath} (deleted)`);
+          delete newState.files[repoPath];
+          deletedLocalPaths.push(localPath);
+        } catch (err) {
+          log(`Warning: could not delete ${localPath}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      } else {
+        if (!deleteWasDismissed) {
+          result.keptDeleted++;
+          fileLog.push(`  ${localPath} (kept — deleted in repo)`);
+          // User explicitly chose to keep — stop tracking so we don't re-prompt next sync.
+          delete newState.files[repoPath];
+        }
+        // If dismissed (Escape), leave in state so the next sync re-prompts.
+      }
+    }
+
+    // Remove directories that became empty after file deletions (deepest first).
+    if (deletedLocalPaths.length > 0) {
+      const dirCandidates = new Set<string>();
+      for (const localPath of deletedLocalPaths) {
+        let dir = localPath.includes("/") ? localPath.slice(0, localPath.lastIndexOf("/")) : "";
+        while (dir) {
+          dirCandidates.add(dir);
+          dir = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : "";
+        }
+      }
+      const sortedDirs = [...dirCandidates].sort((a, b) => b.length - a.length);
+      for (const dir of sortedDirs) {
+        const dirUri = vscode.Uri.joinPath(workspaceFolder.uri, dir);
+        try {
+          const entries = await vscode.workspace.fs.readDirectory(dirUri);
+          if (entries.length === 0) {
+            await vscode.workspace.fs.delete(dirUri, { useTrash: false });
+            fileLog.push(`  ${dir}/ (directory removed)`);
+          }
+        } catch {
+          // Directory already gone or inaccessible — skip.
+        }
+      }
+    }
+  }
+
+  // If the user dismissed any conflict prompt (Escape/X) without making a
   // choice, don't cache the tree ETag — the next sync must re-fetch the tree
-  // and re-offer the dialog. Explicit "Keep all mine" is a deliberate choice
-  // and is respected until the repo actually changes.
-  if (wasDismissed) {
+  // and re-offer the dialog.
+  if (wasDismissed || deleteWasDismissed) {
     newState.treeEtag = undefined;
   }
 
@@ -383,12 +500,10 @@ export async function syncFolder(
     throw syncError;
   }
 
-  log(
-    `${workspaceFolder.name}: ${result.added} added, ${result.updated} updated, ` +
-      `${result.skipped} kept (local edits), ${result.upToDate} unchanged` +
-      (removedInRepo.length ? `, ${removedInRepo.length} removed upstream` : "") +
-      ` [${repoRef.repo}@${repoRef.ref}].`
-  );
+  if (fileLog.length > 0) {
+    log(summarize(workspaceFolder.name, result).replace(/\.$/, ":"));
+    fileLog.forEach((line) => log(line));
+  }
 
   // Record what we manage so the uninstall hook can clean it up later.
   // Use local paths (what's on disk) for the registry and git exclude.
@@ -405,7 +520,7 @@ export async function syncFolder(
     log(`Warning: failed to update registry/gitignore: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  result.noChanges = result.added === 0 && result.updated === 0;
+  result.noChanges = result.added === 0 && result.updated === 0 && result.deleted === 0 && result.keptDeleted === 0;
   return result;
 }
 
@@ -470,6 +585,19 @@ async function showFileDiff(
   );
 }
 
+/** Closes the diff tab opened by showFileDiff for the given local path, if still open. */
+async function closeFileDiff(localPath: string): Promise<void> {
+  const remoteUri = remoteDocUri(localPath).toString();
+  for (const group of vscode.window.tabGroups.all) {
+    for (const tab of group.tabs) {
+      if (tab.input instanceof vscode.TabInputTextDiff && tab.input.modified.toString() === remoteUri) {
+        await vscode.window.tabGroups.close(tab);
+        return;
+      }
+    }
+  }
+}
+
 /**
  * Decides which conflicting files get overwritten, honoring the policy.
  * `wasDismissed` is true when the user pressed Escape/X without choosing —
@@ -493,31 +621,35 @@ async function resolveConflicts(
     return noop;
   }
 
-  // policy === "prompt": offer a batched choice, then per-file if needed.
+  // policy === "prompt": for multiple files offer a batched choice first; for a single
+  // file go straight to per-file review ("Review each" with one item is the same thing).
   const overwrite = new Set<string>();
-  const fileWord = conflicts.length === 1 ? "file" : "files";
-  const choice = await vscode.window.showWarningMessage(
-    `${conflicts.length} setup ${fileWord} you edited locally differ from the repository. What would you like to do?`,
-    { modal: true },
-    "Review each",
-    "Overwrite all",
-    "Keep all mine"
-  );
 
-  if (choice === undefined) {
-    return { shouldOverwrite: () => false, wasDismissed: true };
-  }
-  if (choice === "Overwrite all") {
-    conflicts.forEach((c) => overwrite.add(c.localPath));
-    return { shouldOverwrite: (p) => overwrite.has(p), wasDismissed: false };
-  }
-  if (choice === "Keep all mine") {
-    return noop;
+  if (conflicts.length > 1) {
+    const choice = await vscode.window.showWarningMessage(
+      `${conflicts.length} setup files you edited locally differ from the repository. What would you like to do?`,
+      { modal: true },
+      "Review each",
+      "Overwrite all",
+      "Keep all mine"
+    );
+
+    if (choice === undefined) {
+      return { shouldOverwrite: () => false, wasDismissed: true };
+    }
+    if (choice === "Overwrite all") {
+      conflicts.forEach((c) => overwrite.add(c.localPath));
+      return { shouldOverwrite: (p) => overwrite.has(p), wasDismissed: false };
+    }
+    if (choice === "Keep all mine") {
+      return noop;
+    }
+    // "Review each" — fall through to per-file loop.
   }
 
-  // Review each: per-file dialog with a Show diff button.
-  // Track all paths opened in the diff editor so we can clean up on error (BUG-5).
-  const openDiffs = new Set<string>();
+  // Per-file dialog with a Show diff button.
+  // Track the currently-open diff tab so we can close it on error or early return.
+  let currentDiff: string | undefined;
   try {
     for (const c of conflicts) {
       let diffShown = false;
@@ -525,12 +657,20 @@ async function resolveConflicts(
 
       while (true) {
         if (diffShown) {
-          per = await vscode.window.showWarningMessage(
-            `"${c.localPath}" was modified locally and differs from the repository.`,
-            { modal: true },
-            "Overwrite",
-            "Keep mine"
+          // Quick pick stays open while the user scrolls through the diff (ignoreFocusOut),
+          // and doesn't block the editor like a modal would.
+          const pick = await vscode.window.showQuickPick(
+            [
+              { label: "$(repo-forked) Overwrite", description: "Replace with the repository version", value: "Overwrite" },
+              { label: "$(edit) Keep mine", description: "Keep your local edits", value: "Keep mine" },
+            ],
+            {
+              title: `Conflict: ${c.localPath}`,
+              placeHolder: "Diff is open in the editor below — pick an action when ready",
+              ignoreFocusOut: true,
+            }
           );
+          per = pick?.value;
         } else {
           per = await vscode.window.showWarningMessage(
             `"${c.localPath}" was modified locally and differs from the repository.`,
@@ -542,7 +682,7 @@ async function resolveConflicts(
         }
         if (per === "Show diff") {
           await showFileDiff(c, repoRef, workspaceFolder);
-          openDiffs.add(c.localPath);
+          currentDiff = c.localPath;
           diffShown = true;
           continue;
         }
@@ -553,25 +693,102 @@ async function resolveConflicts(
         overwrite.add(c.localPath);
       }
       clearRemoteContent(c.localPath);
-      openDiffs.delete(c.localPath);
+      if (diffShown) {
+        await closeFileDiff(c.localPath);
+      }
+      currentDiff = undefined;
+
+      if (per === undefined) {
+        // User dismissed (Escape) — apply decisions made so far, re-prompt remaining files next sync.
+        return { shouldOverwrite: (p) => overwrite.has(p), wasDismissed: true };
+      }
     }
   } finally {
-    // Clear any cached diff content left open due to an unexpected error (BUG-5).
-    for (const localPath of openDiffs) {
-      clearRemoteContent(localPath);
+    // Close any diff tab left open due to an unexpected error or early return.
+    if (currentDiff) {
+      clearRemoteContent(currentDiff);
+      await closeFileDiff(currentDiff);
     }
   }
 
   return { shouldOverwrite: (p) => overwrite.has(p), wasDismissed: false };
 }
 
+/**
+ * Resolves what to do with locally-edited files that were deleted from the repo.
+ * Similar to resolveConflicts but simpler: no diff view (there is no repo version to show).
+ */
+async function resolveDeleteConflicts(
+  localPaths: string[],
+  policy: ConflictPolicy
+): Promise<{ shouldDelete: (localPath: string) => boolean; wasDismissed: boolean }> {
+  const noop = { shouldDelete: () => false, wasDismissed: false };
+  if (localPaths.length === 0) {
+    return noop;
+  }
+  if (policy === "overwrite") {
+    return { shouldDelete: () => true, wasDismissed: false };
+  }
+  if (policy === "skip") {
+    return noop;
+  }
+
+  // For multiple files, offer a batched choice first; a single file goes straight
+  // to per-file review ("Review each" with one item is the same thing).
+  if (localPaths.length > 1) {
+    const choice = await vscode.window.showWarningMessage(
+      `${localPaths.length} setup files were removed from the shared repo but you've edited them locally. Delete anyway?`,
+      { modal: true },
+      "Delete all",
+      "Keep all",
+      "Review each"
+    );
+
+    if (choice === undefined) {
+      return { shouldDelete: () => false, wasDismissed: true };
+    }
+    if (choice === "Delete all") {
+      return { shouldDelete: () => true, wasDismissed: false };
+    }
+    if (choice === "Keep all") {
+      return noop;
+    }
+    // "Review each" — fall through to per-file loop.
+  }
+
+  // Per-file dialog.
+  const toDelete = new Set<string>();
+  for (const localPath of localPaths) {
+    const per = await vscode.window.showWarningMessage(
+      `"${localPath}" was removed from the shared repo but you've edited it locally. Delete it?`,
+      { modal: true },
+      "Delete",
+      "Keep mine"
+    );
+    if (per === undefined) {
+      return { shouldDelete: (p) => toDelete.has(p), wasDismissed: true };
+    }
+    if (per === "Delete") {
+      toDelete.add(localPath);
+    }
+  }
+  return { shouldDelete: (p) => toDelete.has(p), wasDismissed: false };
+}
+
+function resultParts(r: SyncResult): string[] {
+  const parts: string[] = [];
+  if (r.added) parts.push(`${r.added} added`);
+  if (r.updated) parts.push(`${r.updated} updated`);
+  if (r.deleted) parts.push(`${r.deleted} deleted`);
+  if (r.skipped) parts.push(`${r.skipped} kept`);
+  if (r.keptDeleted) parts.push(`${r.keptDeleted} kept on disk`);
+  return parts;
+}
+
 export function summarize(folderName: string, r: SyncResult): string {
-  const parts = [`${r.added} added`, `${r.updated} updated`];
-  if (r.skipped) {
-    parts.push(`${r.skipped} kept (local edits)`);
-  }
-  if (r.removedInRepo.length) {
-    parts.push(`${r.removedInRepo.length} removed in repo (left on disk)`);
-  }
-  return `${folderName}: ${parts.join(", ")}.`;
+  return `${folderName}: ${resultParts(r).join(", ")}.`;
+}
+
+export function toastSummary(r: SyncResult): string {
+  return `${resultParts(r).join(", ")}.`;
 }

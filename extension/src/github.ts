@@ -32,10 +32,16 @@ function encodeRepoSlug(repo: string): string {
 /** Thrown when the error is caused by a misconfigured repository URL (not a transient failure). */
 export class ConfigError extends Error {
   needsToken?: boolean;
-  constructor(message: string, needsToken?: boolean) {
+  /** The extension setting key to open when the user clicks "Open settings". Defaults to repository. */
+  setting?: string;
+  /** Machine-readable error kind for programmatic discrimination (not shown to users). */
+  kind?: string;
+  constructor(message: string, needsToken?: boolean, setting?: string, kind?: string) {
     super(message);
     this.name = "ConfigError";
     this.needsToken = needsToken;
+    this.setting = setting;
+    this.kind = kind;
   }
 }
 
@@ -181,10 +187,17 @@ async function getJson(
     if (!token) {
       throw new ConfigError(
         `Repository not found. If this is a private repository, set a GitHub token with the \`repo\` scope.`,
-        true
+        true,
+        undefined,
+        "not-found"
       );
     }
-    throw new ConfigError(`Repository not found. Check the repository URL in extension settings, and verify your token has the \`repo\` scope.`);
+    throw new ConfigError(
+      `Repository not found. Check the repository URL in extension settings, and verify your token has the \`repo\` scope.`,
+      undefined,
+      undefined,
+      "not-found"
+    );
   }
   if (status < 200 || status >= 300) {
     throw new Error(`GitHub API returned HTTP ${status} for ${url}`);
@@ -209,7 +222,39 @@ export async function getTree(
   etag?: string
 ): Promise<TreeResult> {
   const url = `https://api.github.com/repos/${encodeRepoSlug(repo)}/git/trees/${encodeURIComponent(ref)}?recursive=1`;
-  const res = await getJson(url, token, etag);
+  let res: Awaited<ReturnType<typeof getJson>>;
+  try {
+    res = await getJson(url, token, etag);
+  } catch (err) {
+    if (err instanceof ConfigError && err.kind === "not-found") {
+      // Follow-up call to distinguish branch vs repo URL vs token issue.
+      try {
+        await getJson(`https://api.github.com/repos/${encodeRepoSlug(repo)}`, token);
+        // Repo returned 200 — it exists, so the branch is the problem.
+        throw new ConfigError(
+          `Branch "${ref}" not found — check the branch name in settings.`,
+          false,
+          "aiSetupSync.branch"
+        );
+      } catch (repoErr) {
+        if (!(repoErr instanceof ConfigError)) throw err; // RateLimitError or network error — can't distinguish branch vs repo, surface original not-found
+        if (repoErr.setting === "aiSetupSync.branch") throw repoErr; // branch error we just created
+        // Repo check also failed — either no token or wrong URL.
+        if (repoErr.needsToken) {
+          throw new ConfigError(
+            `Repository not found — if this is a private repo, set a GitHub token with the repo scope.`,
+            true
+          );
+        }
+        throw new ConfigError(
+          `Repository not found — check the repository URL in settings.`,
+          false,
+          "aiSetupSync.repository"
+        );
+      }
+    }
+    throw err;
+  }
   if (res.notModified) {
     return { entries: [], etag: res.etag, notModified: true };
   }

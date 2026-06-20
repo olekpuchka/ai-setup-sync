@@ -12,6 +12,10 @@ export function initOutput(context: vscode.ExtensionContext): void {
   }
 }
 
+export function showOutput(): void {
+  channel?.show(true);
+}
+
 export function log(message: string): void {
   if (!channel) {
     return;
