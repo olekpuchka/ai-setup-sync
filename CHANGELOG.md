@@ -2,7 +2,20 @@
 
 All notable changes to the **AI Setup Sync** extension are documented here.
 
-Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+---
+
+## [1.1.3] — 2026-06-21
+
+### Fixed
+
+- **Failed background sync showed a success status** — after a background sync failed (network error, rate limit, etc.), the status bar incorrectly reverted to the green "Synced" indicator instead of staying on the ⚠ error state, and the tooltip reported a recent successful sync that never happened.
+- **GitHub rate-limit backoff was silently cleared** — when a background sync hit the GitHub rate limit, the backoff that pauses further background syncs until the limit resets was wiped immediately after being set, so background syncs no longer honoured it.
+- **Status bar stuck on "No repository configured"** — after setting the repository URL for the first time, the status bar stayed on the ⚙ unconfigured state until the window was reloaded. It now updates immediately, and an initial sync runs automatically when auto-sync is enabled.
+- **Remove Synced Files missed files with `pathMappings`** — if the local cleanup registry was unavailable, the fallback used repo-relative paths against disk, so files were silently left in place when `pathMappings` remapped them. Cleanup now translates to the correct on-disk paths.
+
+### Changed
+
+- **Registry writes are now atomic** — the internal record of synced files is written via a temp file and atomic rename, so a concurrent read (e.g. from another VS Code window) can never see a half-written file.
 
 ---
 

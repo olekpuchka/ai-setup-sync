@@ -4,7 +4,7 @@ import { ConfigError, RateLimitError, RepoRef } from "./github";
 import { initOutput, log, showOutput } from "./output";
 import { readRegistry, setWorkspaceFiles } from "./registry";
 import { getState, saveState } from "./state";
-import { ConflictPolicy, toastSummary, syncFolder, SyncResult } from "./sync";
+import { ConflictPolicy, localizeStateFiles, toastSummary, syncFolder, SyncResult } from "./sync";
 import { REMOTE_SCHEME, remoteContentProvider } from "./remoteContent";
 import { deleteToken, getToken, setToken } from "./token";
 
@@ -225,6 +225,7 @@ async function runSync(
     const summaries: string[] = [];
     let changed = false;
     let noFilesFound = false;
+    let hadError = false;
     for (const folder of folders) {
       // Detect repo URL change — prompt to clean up files from the previous repo.
       const prevState = getState(context, folder);
@@ -240,7 +241,11 @@ async function runSync(
         }
         if (choice === "Remove") {
           const reg = readRegistry();
-          const files = reg.workspaces[folder.uri.fsPath]?.files ?? prevState.files;
+          // Registry holds local (on-disk) paths; state.files is keyed by repo
+          // path, so localize the fallback before deleting (matters with pathMappings).
+          const files =
+            reg.workspaces[folder.uri.fsPath]?.files ??
+            localizeStateFiles(prevState.files, settings.pathMappings);
           removeManagedFiles(folder.uri.fsPath, files);
         }
         await saveState(context, folder, { ref: "", files: {} });
@@ -261,6 +266,7 @@ async function runSync(
         );
       } catch (err) {
         handleSyncError(err, interactive);
+        hadError = true;
         continue;
       }
       if (result.noFilesFound) {
@@ -271,6 +277,13 @@ async function runSync(
           summaries.push(toastSummary(result));
         }
       }
+    }
+
+    if (hadError) {
+      // handleSyncError already set the error status (and any rate-limit
+      // backoff) for the failed folder(s); don't overwrite them with a success
+      // state, and don't clear the backoff we may have just armed.
+      return;
     }
 
     lastSyncAt = Date.now();
@@ -322,13 +335,17 @@ async function removeSyncedFiles(context: vscode.ExtensionContext): Promise<void
     return;
   }
 
+  const settings = readSettings();
   const reg = readRegistry();
   let deleted = 0;
   const allKeptPaths: Array<{ folder: vscode.WorkspaceFolder; rel: string }> = [];
 
   for (const folder of folders) {
+    // Registry holds local (on-disk) paths; state.files is keyed by repo path,
+    // so localize the fallback before deleting (matters with pathMappings).
     const files =
-      reg.workspaces[folder.uri.fsPath]?.files ?? getState(context, folder).files;
+      reg.workspaces[folder.uri.fsPath]?.files ??
+      localizeStateFiles(getState(context, folder).files, settings.pathMappings);
     if (!files || Object.keys(files).length === 0) {
       continue;
     }
@@ -443,11 +460,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Trigger: periodic background check for content + extension updates.
   schedulePolling(context);
 
-  // Re-arm polling if the user changes our settings.
+  // React to setting changes: re-arm polling and refresh the status bar (so
+  // first-time setup doesn't stay stuck on "unconfigured"). Only kick a sync on
+  // the empty→configured transition — re-syncing on every unrelated setting tweak
+  // is noisy and would flash an error while the repo URL is mid-edit.
+  let lastRepository = settings.repository;
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration(CONFIG)) {
-        schedulePolling(context);
+      if (!e.affectsConfiguration(CONFIG)) {
+        return;
+      }
+      const s = readSettings();
+      const justConfigured = !lastRepository && !!s.repository;
+      lastRepository = s.repository;
+      if (!syncing) {
+        setStatus(s.repository ? "idle" : "unconfigured");
+      }
+      schedulePolling(context);
+      if (justConfigured && (s.syncMode === "always" || s.syncMode === "onOpen")) {
+        void runSync(context, false);
       }
     })
   );

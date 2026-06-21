@@ -76,6 +76,25 @@ function toLocalPath(repoPath: string, sortedMappings: [string, string][]): stri
 }
 
 /**
+ * Translates a repo-relative file map (as stored in SyncState) into the
+ * workspace-relative paths actually on disk, applying pathMappings. The registry
+ * stores local paths, but `state.files` is keyed by repo path — callers that fall
+ * back to `state.files` for cleanup must localize first, or they target the wrong
+ * paths (and silently delete nothing) when pathMappings is set.
+ */
+export function localizeStateFiles(
+  files: Record<string, string>,
+  pathMappings: Record<string, string>
+): Record<string, string> {
+  const sorted: [string, string][] = Object.entries(pathMappings).sort((a, b) => b[0].length - a[0].length);
+  const out: Record<string, string> = {};
+  for (const [repoPath, sha] of Object.entries(files)) {
+    out[toLocalPath(repoPath, sorted)] = sha;
+  }
+  return out;
+}
+
+/**
  * Rejects local paths that could escape the workspace root after pathMappings
  * translation. Protects against a malicious workspace `.vscode/settings.json`
  * mapping a repo path to `../../etc/passwd` (SEC-1b).
