@@ -20,6 +20,7 @@ Treat your AI setup like shared code: change it in one place, and it propagates 
 
 - [How it works](#how-it-works)
 - [Features](#features)
+- [Requirements](#requirements)
 - [Quick start](#quick-start)
 - [Setting up your repository](#setting-up-your-repository)
 - [Default synced paths](#default-synced-paths)
@@ -54,11 +55,17 @@ detects those edits and lets them choose what to keep, so no work is ever silent
 - **Automatic sync** — pulls on project open and when you return focus to the window. No manual steps.
 - **Multi-tool support** — Claude Code, GitHub Copilot, Cursor, Google Antigravity, Gemini CLI, OpenAI Codex, and any custom path.
 - **Conflict resolution** — detects local edits and prompts per file, with a built-in diff viewer before anything is overwritten.
-- **Path mappings** — translate any repo path to the local path a tool expects (e.g. `Claude/` → `.claude/`, or `PlatformA/.claude/` → `.claude/`).
+- **Path mappings** — translate any repo path to the local path a tool expects (e.g. `Claude/` → `.claude/`), or map a whole subfolder to your project root with `"projectA": "/"`.
 - **Safe deletions** — files removed from the repo are removed locally too; your local edits are protected, and emptied directories are cleaned up.
 - **Stays out of git** — synced files are added to `.git/info/exclude`, so they never clutter your pending changes.
 - **Private & SSO repos** — GitHub token stored securely in the OS keychain (VS Code SecretStorage).
 - **Configurable** — choose the branch, which folders to sync, and how conflicts resolve.
+
+## Requirements
+
+- **VS Code 1.85** or later.
+- **A GitHub repository** containing your shared AI setup files (public, private, or SAML SSO org).
+- **For private or SSO-protected repos:** a GitHub **classic** personal access token with the **`repo`** scope.
 
 ## Quick start
 
@@ -157,14 +164,81 @@ Configure via `aiSetupSync.targetFolders` — toggle defaults on or off, or add 
 | `aiSetupSync.repository` | *(required)* | GitHub repository URL to sync from, e.g. `https://github.com/your-org/your-repo`. Private and SAML SSO org repos require a **classic** PAT with the **`repo`** scope — run **Set GitHub Token** from the command palette. |
 | `aiSetupSync.branch` | `main` | Branch to sync from. Set to `master` or any other branch if your repo uses a different default. |
 | `aiSetupSync.targetFolders` | *(see above)* | Files and folders to sync from the repo root. Each entry can be toggled on or off — set to `false` to disable a default without removing it. Add entries for any tool that reads config from your project. |
-| `aiSetupSync.pathMappings` | `{}` | Rename paths as files sync from the repo to your project. `"Claude": ".claude"` rewrites `Claude/instructions/style.md` → `.claude/instructions/style.md`. More specific (longer) keys win. |
+| `aiSetupSync.pathMappings` | `{}` | Rename paths as files sync from the repo to your project. `"Claude": ".claude"` rewrites `Claude/instructions/style.md` → `.claude/instructions/style.md`. Use `"/"` to map a subfolder to your project root: `"projectA": "/"` syncs `projectA/.github/` as `.github/`. See [Path mappings & multi-project repos](#path-mappings--multi-project-repos) for how overlaps are resolved. |
 | `aiSetupSync.conflictPolicy` | `prompt` | What to do when a local file differs from the repo version. `prompt` — ask per file, with a *Show diff* button. `overwrite` — always replace. `skip` — never touch local edits. |
 
 ## Path mappings & multi-project repos
 
-If your repo organises setup files under per-project subfolders (e.g. `Project1/`, `Project2/`) or
-per-platform subfolders (e.g. `PlatformA/`, `PlatformB/`), use `pathMappings` to pull only from the
-subfolder that matches the current project.
+Path mappings rewrite a repo path to a different local path as files sync. Reach for them when your
+repo's layout doesn't match what your tools expect at the project root — for example, when setup
+files live under per-project or per-platform subfolders, or under names like `Claude/` instead of
+`.claude/`.
+
+**Which pattern do you want?**
+
+| If you want to… | Set | See |
+| --- | --- | --- |
+| Rename a folder | `"Claude": ".claude"` | [Setting up your repository](#setting-up-your-repository) |
+| Sync one subfolder's contents to your project root | `"projectA": "/"` | [Map a whole subfolder](#map-a-whole-subfolder-to-the-workspace-root) |
+| Pull only specific subpaths from a multi-project repo | `"PlatformA/.claude": ".claude"` | [Map individual subpaths](#map-individual-subpaths) |
+
+### Map a whole subfolder to the workspace root
+
+Set the mapping value to `"/"` to strip a subfolder prefix and sync everything inside it straight to
+your project root. This is the simplest setup when one repo subfolder holds a project's whole AI setup:
+
+**Example repo layout:**
+
+```
+your-setup-repo/
+├── .github/                        # shared across all projects
+└── projectA/
+    ├── .github/                    # projectA-specific agents and instructions
+    ├── .claude/
+    └── .cursor/
+```
+
+**Config:**
+
+```json
+"aiSetupSync.pathMappings": {
+  "projectA": "/"
+}
+```
+
+Every file under `projectA/` syncs to the workspace root with its prefix stripped:
+
+| Repo path | Local path |
+| --- | --- |
+| `projectA/.github/agents/coding.md` | `.github/agents/coding.md` |
+| `projectA/.claude/commands/foo.md` | `.claude/commands/foo.md` |
+| `projectA/.cursor/rules/style.mdc` | `.cursor/rules/style.mdc` |
+
+**Merging root files with the subfolder**
+
+If both the root `.github/` and `projectA/.github/` exist in the repo, files from both land in your
+local `.github/`. Differently named files simply merge together. If the same file exists in both, the
+**mapped subfolder wins** — `projectA/.github/agents/coding.md` overrides the root
+`.github/agents/coding.md`.
+
+To sync only specific root folders alongside the subfolder — for example `.github` from the root but
+nothing else — disable the defaults you don't need:
+
+```json
+"aiSetupSync.targetFolders": {
+  ".claude": false,
+  ".cursor": false,
+  ".agents": false
+},
+"aiSetupSync.pathMappings": {
+  "projectA": "/"
+}
+```
+
+### Map individual subpaths
+
+For finer control — or when different projects share the same repo and each needs only its own
+folder — map specific subpaths instead of the whole project folder:
 
 **Example repo layout:**
 
@@ -189,15 +263,13 @@ your-setup-repo/
 }
 ```
 
-Mapping keys can be any repo path, not just top-level folders. In this example:
-
 - `PlatformA/.claude/` and everything inside → `.claude/` locally
 - `PlatformA/CLAUDE.md` → `CLAUDE.md` locally
 - `PlatformA/.github/`, `PlatformB/`, and everything else → ignored (no mapping defined)
 
 **If your repo also has shared files at the root** (e.g. a common `.claude/` alongside the
-per-platform folders), they'll be synced too, because `targetFolders` includes `.claude` by
-default. To prevent that, disable the root-level entries:
+per-platform folders), they'll be synced too because `targetFolders` includes `.claude` by default.
+To prevent that, disable the root-level entries:
 
 ```json
 "aiSetupSync.targetFolders": {
@@ -212,6 +284,30 @@ default. To prevent that, disable the root-level entries:
 
 To switch platforms, update the mapping keys (e.g. replace `PlatformA` with `PlatformB`). Everything
 else stays the same.
+
+### How overlaps are resolved
+
+When more than one rule could apply to the same file, the outcome is always predictable:
+
+- **A mapping and a target folder point at the same file** → the mapping wins. (Example: a root
+  `.github/agents/coding.md` from a target folder and a `projectA/.github/agents/coding.md` mapped to
+  `.github/` — the mapped one is kept.)
+- **Two mapping keys match the same file** → the more specific key wins (the one that matches more of
+  the path). This lets a nested key override a broader one:
+
+  ```json
+  "aiSetupSync.pathMappings": {
+    "projectA":         "/",
+    "projectA/.github": "archive/.github"
+  }
+  ```
+
+  Here `projectA/.github/agents/coding.md` follows the more specific `projectA/.github` rule and syncs
+  to `archive/.github/agents/coding.md`, while everything else under `projectA/` falls back to the
+  broader `"/"` rule and syncs to your project root.
+
+In every case each repo file syncs to exactly one local path — overlapping rules never produce
+duplicate copies.
 
 ## Conflict handling
 

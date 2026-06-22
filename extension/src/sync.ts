@@ -66,10 +66,11 @@ export interface SyncResult {
 function toLocalPath(repoPath: string, sortedMappings: [string, string][]): string {
   for (const [from, to] of sortedMappings) {
     if (repoPath === from) {
-      return to;
+      return to || repoPath;
     }
     if (repoPath.startsWith(from + "/")) {
-      return to + repoPath.slice(from.length);
+      const remainder = repoPath.slice(from.length + 1);
+      return to ? to + "/" + remainder : remainder;
     }
   }
   return repoPath;
@@ -105,16 +106,12 @@ function validateLocalPath(p: string): void {
   }
 }
 
-/** Paths we never sync even though they live under a target folder. */
+/** Returns true when the repo path is claimed by a pathMappings key (vs. a targetFolder). */
+function isMatchedByMapping(repoPath: string, sortedMappings: [string, string][]): boolean {
+  return sortedMappings.some(([from]) => repoPath === from || repoPath.startsWith(from + "/"));
+}
+
 function isSyncable(path: string, targetFolders: string[], mappings: Record<string, string>): boolean {
-  const base = path.split("/").pop() ?? "";
-  if (base === ".DS_Store") {
-    return false;
-  }
-  // The repo's own CI must not be copied into consumers' projects.
-  if (path.startsWith(".github/workflows/")) {
-    return false;
-  }
   if (targetFolders.some((f) => path === f || path.startsWith(f + "/"))) {
     return true;
   }
@@ -148,6 +145,8 @@ interface PlannedFile {
   /** Workspace-relative destination path (may differ from entry.path when pathMappings is set). */
   localPath: string;
   classification: Classification;
+  /** True when the entry was matched by a pathMapping key rather than a targetFolder. */
+  fromMapping?: boolean;
 }
 
 /**
@@ -176,13 +175,32 @@ export async function syncFolder(
     const acknowledged = state.acknowledged ?? {};
     const locallyModified: PlannedFile[] = [];
     let syncableCount = 0;
-    for (const [repoPath, lastSyncedSha] of Object.entries(state.files)) {
+    // Process mapping-matched state entries first so seenLocalPaths304 keeps the
+    // mapping-priority winner for each local path, mirroring the plannedMap dedup logic
+    // in the full-tree path. Prevents the 304 path from using a loser's SHA during the
+    // transient window between a mapping change and the next full-tree sync.
+    const sortedStateEntries = (Object.entries(state.files) as [string, string][]).sort(
+      ([a], [b]) => {
+        const aMap = isMatchedByMapping(a, sortedMappings);
+        const bMap = isMatchedByMapping(b, sortedMappings);
+        return aMap === bMap ? 0 : aMap ? -1 : 1;
+      }
+    );
+    const seenLocalPaths304 = new Set<string>();
+    for (const [repoPath, lastSyncedSha] of sortedStateEntries) {
       if (!isSyncable(repoPath, targetFolders, pathMappings)) {
         continue;
       }
       syncableCount++;
       const localPath = toLocalPath(repoPath, sortedMappings);
       validateLocalPath(localPath);
+      // state.files may transiently have two repo paths mapping to the same local path
+      // (before a full-tree sync cleans them up). Skip duplicates so we don't issue
+      // concurrent writes to the same file or store a stale SHA in the registry.
+      if (seenLocalPaths304.has(localPath)) {
+        continue;
+      }
+      seenLocalPaths304.add(localPath);
       const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, localPath);
       const onDisk = await readIfExists(fileUri);
       if (!onDisk) {
@@ -210,10 +228,14 @@ export async function syncFolder(
       // Keep registry + gitignore in sync after restore.
       try {
         const localFiles: Record<string, string> = {};
-        for (const [repoPath, sha] of Object.entries(state.files)) {
+        const seenLp = new Set<string>();
+        for (const [repoPath, sha] of sortedStateEntries) {
           const lp = toLocalPath(repoPath, sortedMappings);
           validateLocalPath(lp);
-          localFiles[lp] = sha;
+          if (!seenLp.has(lp)) {
+            seenLp.add(lp);
+            localFiles[lp] = sha;
+          }
         }
         setWorkspaceFiles(workspaceFolder.uri.fsPath, localFiles);
         await applyGitExclude(workspaceFolder, Object.keys(localFiles));
@@ -307,30 +329,71 @@ export async function syncFolder(
   }
 
   // Classify each remote file against what's on disk + what we last synced.
-  const planned: PlannedFile[] = [];
+  // When two repo paths translate to the same local path (e.g. root .github/ and
+  // projectA/.github/ both targeting .github/), the pathMapping-sourced entry wins
+  // over the targetFolder-sourced one. Between same-priority entries the first wins
+  // (GitHub tree order is stable), so the result is always deterministic.
+  // Repo paths that lose the dedup are collected so their stale state entries can be
+  // pruned from newState.files — otherwise they accumulate and corrupt the registry.
+  // Priority-aware local-path → sha lookup from prior state. Used as a fallback when the
+  // current winner's repo path was never previously tracked (mapping change). Two passes
+  // mirror the plannedMap priority: mapping entries win over targetFolder entries, with
+  // first-in-insertion-order as the tiebreaker within each tier.
+  const stateByLocalPath = new Map<string, string>();
+  for (const [rp, sha] of Object.entries(state.files)) {
+    const lp = toLocalPath(rp, sortedMappings);
+    if (!stateByLocalPath.has(lp) && isMatchedByMapping(rp, sortedMappings)) {
+      stateByLocalPath.set(lp, sha);
+    }
+  }
+  for (const [rp, sha] of Object.entries(state.files)) {
+    const lp = toLocalPath(rp, sortedMappings);
+    if (!stateByLocalPath.has(lp)) {
+      stateByLocalPath.set(lp, sha);
+    }
+  }
+
+  const plannedMap = new Map<string, PlannedFile>();
+  const skippedRepoPaths = new Set<string>();
+  // Maps each loser repo path to the local path it shares with the winner, so we can
+  // conditionally prune it only after confirming the winner was successfully written.
+  const skippedToLocalPath = new Map<string, string>();
   for (const entry of entries) {
     const localPath = toLocalPath(entry.path, sortedMappings);
     validateLocalPath(localPath);
+    const fromMapping = isMatchedByMapping(entry.path, sortedMappings);
+    const existing = plannedMap.get(localPath);
+    if (existing && (existing.fromMapping || !fromMapping)) {
+      skippedRepoPaths.add(entry.path);
+      skippedToLocalPath.set(entry.path, localPath);
+      continue;
+    }
+    // If this entry displaces an existing lower-priority entry, track that one as skipped too.
+    if (existing) {
+      skippedRepoPaths.add(existing.entry.path);
+      skippedToLocalPath.set(existing.entry.path, localPath);
+    }
     const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, localPath);
     const onDisk = await readIfExists(fileUri);
     if (!onDisk) {
-      planned.push({ entry, localPath, classification: "new" });
+      plannedMap.set(localPath, { entry, localPath, classification: "new", fromMapping });
       continue;
     }
     const localSha = gitBlobSha(onDisk);
     if (localSha === entry.sha) {
-      planned.push({ entry, localPath, classification: "up-to-date" });
+      plannedMap.set(localPath, { entry, localPath, classification: "up-to-date", fromMapping });
       continue;
     }
-    const lastSynced = state.files[entry.path];
+    const lastSynced = state.files[entry.path] ?? stateByLocalPath.get(localPath);
     if (lastSynced && lastSynced === localSha) {
       // On disk matches what we wrote last time → user didn't touch it.
-      planned.push({ entry, localPath, classification: "safe-update" });
+      plannedMap.set(localPath, { entry, localPath, classification: "safe-update", fromMapping });
     } else {
       // Local content diverges from both repo and our last write.
-      planned.push({ entry, localPath, classification: "conflict" });
+      plannedMap.set(localPath, { entry, localPath, classification: "conflict", fromMapping });
     }
   }
+  const planned = [...plannedMap.values()];
 
   const conflicts = planned.filter((p) => p.classification === "conflict");
   const { shouldOverwrite: overwriteConflict, wasDismissed } = await resolveConflicts(
@@ -343,7 +406,11 @@ export async function syncFolder(
   // Files that are removed from the repo but were previously synced by us.
   const allRepoPaths = new Set(tree.entries.map((e) => e.path));
   const remotePaths = new Set(entries.map((e) => e.path));
-  const removedInRepo = Object.keys(state.files).filter((p) => !remotePaths.has(p) && !allRepoPaths.has(p));
+  // Exclude skipped (dedup-loser) paths: if a loser's repo path also disappears from the
+  // tree in the same sync, removedInRepo would otherwise target the winner's live local file.
+  const removedInRepo = Object.keys(state.files).filter(
+    (p) => !remotePaths.has(p) && !allRepoPaths.has(p) && !skippedRepoPaths.has(p)
+  );
   // Previously synced files still in the repo but now excluded by targetFolders/pathMappings — silently drop from state.
   const excludedBySettings = Object.keys(state.files).filter((p) => !remotePaths.has(p) && allRepoPaths.has(p));
 
@@ -366,7 +433,6 @@ export async function syncFolder(
     treeEtag: tree.etag,
     files: { ...state.files },
   };
-
   const fileLog: string[] = [];
   const toWrite: PlannedFile[] = [];
   for (const p of planned) {
@@ -405,6 +471,16 @@ export async function syncFolder(
     });
   } catch (err) {
     syncError = err;
+  }
+
+  // Prune loser repo paths from state, but only when their winner was successfully written.
+  // If the winner's download failed, leave the loser in state so the next sync retries
+  // rather than zeroing tracking for that local path entirely.
+  for (const [loserPath, localPath] of skippedToLocalPath) {
+    const winner = plannedMap.get(localPath);
+    if (!winner || newState.files[winner.entry.path] === winner.entry.sha) {
+      delete newState.files[loserPath];
+    }
   }
 
   // Forget excluded files in our state (disabled via targetFolders/pathMappings — not deleted from disk).
@@ -509,6 +585,22 @@ export async function syncFolder(
   // If the user dismissed any conflict prompt (Escape/X) without making a
   // choice, don't cache the tree ETag — the next sync must re-fetch the tree
   // and re-offer the dialog.
+  // Carry over "Keep mine" acknowledgements for files whose repo SHA hasn't changed.
+  // A full-tree sync triggered by a settings change (not a repo change) would otherwise
+  // wipe these, causing a spurious re-prompt on the very next 304 sync for a file the
+  // user already decided to keep.
+  if (state.acknowledged) {
+    const carried: Record<string, string> = {};
+    for (const [repoPath, ackSha] of Object.entries(state.acknowledged)) {
+      if (state.files[repoPath] !== undefined && state.files[repoPath] === newState.files[repoPath]) {
+        carried[repoPath] = ackSha;
+      }
+    }
+    if (Object.keys(carried).length > 0) {
+      newState.acknowledged = carried;
+    }
+  }
+
   if (wasDismissed || deleteWasDismissed) {
     newState.treeEtag = undefined;
   }
@@ -526,11 +618,18 @@ export async function syncFolder(
 
   // Record what we manage so the uninstall hook can clean it up later.
   // Use local paths (what's on disk) for the registry and git exclude.
+  // Dedup: if newState.files still has both a winner and a loser for the same local path
+  // (e.g. the winner's write failed and the loser was kept), first-wins is safe enough —
+  // the next full-tree sync will normalise state and rebuild the registry correctly.
   const localFiles: Record<string, string> = {};
+  const seenRegistryPaths = new Set<string>();
   for (const [repoPath, sha] of Object.entries(newState.files)) {
     const lp = toLocalPath(repoPath, sortedMappings);
     validateLocalPath(lp);
-    localFiles[lp] = sha;
+    if (!seenRegistryPaths.has(lp)) {
+      seenRegistryPaths.add(lp);
+      localFiles[lp] = sha;
+    }
   }
   try {
     setWorkspaceFiles(workspaceFolder.uri.fsPath, localFiles);

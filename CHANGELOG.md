@@ -4,6 +4,30 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.3.0] — 2026-06-22
+
+### Added
+
+- **Map a subfolder to the project root** — set a `pathMappings` value to `"/"` to sync a repo subfolder's contents straight to your project root. For example, `"projectA": "/"` syncs `projectA/.github/` as `.github/` and `projectA/.claude/` as `.claude/`. This is the simplest way to keep a project's whole AI setup in one repo subfolder.
+
+### Fixed
+
+- **Predictable merging when paths overlap** — when a path mapping and a target folder both point a file at the same local path, the path-mapping version now always wins. Previously the outcome depended on processing order and could change between syncs.
+- **Spurious conflict after adding a path mapping** — when a user added a path mapping that changed which repo path wins for a given local file, the next sync could show a false conflict prompt even though the on-disk content matched what the extension last wrote. The classifier now falls back to a local-path lookup when the repo-path key is new.
+- **Active file could be deleted when a lower-priority repo path was removed from the repo** — if a dedup-loser repo path was later deleted from the setup repo, the deletion logic could target the winner's live local file and prompt the user to delete it, or delete it silently on `overwrite` policy.
+- **Cached sync could write the same file twice with different content** — when `state` transiently held two repo paths mapping to the same local path, the 304 restore loop issued concurrent writes to the same file, with the last download to finish winning non-deterministically. A dedup guard now ensures each local path is processed at most once per 304 pass.
+- **State zeroed after a download failure during dedup** — when a higher-priority entry displaced a lower-priority one and its download then failed, the extension deleted the loser's state entry before confirming the winner wrote, leaving no tracking for that local path and causing a spurious conflict on every subsequent sync. The loser is now only pruned once the winner is confirmed in state.
+- **Loser entry incorrectly pruned even when winner write failed** — the guard that was meant to keep the loser in state after a failed write checked `!== undefined`, which is always true for any previously-tracked winner (their old SHA is present from the state spread). The check now compares against the winner's new SHA so the loser is only pruned on confirmed success.
+- **Spurious conflict when a new mapping winner was never previously tracked** — the SHA fallback used to identify "what we last wrote to this local path" was computed with last-write-wins across all state entries for that path. If a lower-priority targetFolder entry happened to iterate last, its SHA overwrote the correct mapping-entry SHA, causing the next sync to misclassify an unmodified file as a conflict. The fallback now gives mapping entries priority over targetFolder entries, matching the dedup logic.
+- **304 sync could use a loser's SHA for conflict detection** — during the transient window between a mapping change and the next full-tree sync, both the winner and loser repo paths can be in state. The 304 loop previously iterated state in insertion order, so the loser could be processed first and its SHA used to check for local modifications, producing spurious conflict prompts. State entries are now sorted so mapping-priority winners are always checked first.
+- **"Keep mine" acknowledgements lost after a settings change** — changing path mappings or target folders triggers a full-tree sync that previously cleared all "Keep mine" decisions, causing a re-prompt on the very next cached sync even though the repo content hadn't changed. Acknowledgements are now carried forward for files whose repo SHA is unchanged.
+
+### Documentation
+
+- **Path mappings section reworked** — added a "Which pattern do you want?" decision table, a worked example for mapping a whole subfolder to the project root, and a "How overlaps are resolved" subsection that explains precedence with examples. Added a Requirements section.
+
+---
+
 ## [1.2.0] — 2026-06-21
 
 ### Changed
