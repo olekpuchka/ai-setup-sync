@@ -7,10 +7,9 @@
 
 **One repo. Every project. Always in sync.**
 
-A VS Code extension that keeps your AI configuration — for Claude Code, GitHub Copilot, Cursor,
-Google Antigravity, Gemini CLI, OpenAI Codex, and more — identical across every project. Maintain
-it once in a GitHub repository; the extension pulls it into each project on open and whenever you
-return to the window, so no one ever copy-pastes a `CLAUDE.md` between repos again.
+Every AI coding tool needs its own config file in every repo. AI Setup Sync maintains yours once
+in a GitHub repository and distributes it automatically across every project — Claude Code, GitHub
+Copilot, Cursor, Google Antigravity, Gemini CLI, OpenAI Codex, and more. No copy-pasting.
 
 > **📖 Looking for usage docs?** This page orients you to the repository. For installation,
 > settings, conflict handling, path mappings, and the FAQ, see
@@ -19,10 +18,65 @@ return to the window, so no one ever copy-pastes a `CLAUDE.md` between repos aga
 
 ## What it does
 
-- **Syncs automatically** — pulls on project open and when you return focus to the window.
-- **Supports every tool** — Claude Code, Copilot, Cursor, Antigravity, Gemini CLI, Codex, or any custom path.
+- **Syncs automatically** — pulls from your GitHub repo on project open and window focus.
+- **Protects your Intellectual Property** — your AI setup lives in your own private repository, syncs automatically into each project, and is excluded from git. Your instructions never touch a client's codebase.
+- **Supports every tool** — any file-based AI config works out of the box (Claude Code, Copilot, Cursor, and more). Custom path mappings cover anything else.
 - **Protects local edits** — detects files you've changed and prompts before overwriting, with a built-in diff.
 - **Stays out of git** — synced files are added to `.git/info/exclude`, never cluttering your changes.
+
+## How it works
+
+Sync triggers automatically on startup, window focus, and settings changes. Push to your config repo and every project picks up the change on the next sync — here's how the pieces connect:
+
+```mermaid
+flowchart LR
+    classDef vscode fill:#1a1030,stroke:#8B5CF6,stroke-width:2px,color:#C4B5FD
+    classDef core   fill:#0d1d30,stroke:#58A6FF,stroke-width:2px,color:#93C5FD
+    classDef sync   fill:#1f1208,stroke:#F97316,stroke-width:2px,color:#FED7AA
+    classDef github fill:#0d1f13,stroke:#3FB950,stroke-width:2px,color:#86EFAC
+    classDef local  fill:#061b1f,stroke:#06B6D4,stroke-width:2px,color:#67E8F9
+    classDef state  fill:#1a1a1a,stroke:#6B7280,stroke-width:2px,color:#9CA3AF
+
+    A(["VS CODE EVENTS
+    · Extension startup
+    · Window focused
+    · Settings changed
+    · Manual sync command"]):::vscode -->|triggers| B
+
+    B["EXTENSION CORE
+    · Throttles background syncs
+    · Manages status bar
+    · Rate limit handling
+    · Registers commands"]:::core -->|dispatches| C
+
+    D[("GITHUB API
+    · Repo tree (ETag cached)
+    · Raw file content
+    · PAT auth (keychain)
+    · 304 Not Modified")]:::github -->|provides files| C
+
+    C{{"SYNC ENGINE
+    · Parallel downloads & deletions
+    · Conflict detection
+    · ETag deduplication
+    · Path mapping rules"}}:::sync -->|writes| E
+
+    C -->|saves state| F
+
+    E["LOCAL FILES
+    · .claude, .github and more
+    · Hidden from git tracking"]:::local
+
+    F[("STATE / REGISTRY
+    · ETags per file
+    · File paths + repo URL")]:::state
+
+    linkStyle 0 stroke:#8B5CF6,stroke-width:2px
+    linkStyle 1 stroke:#58A6FF,stroke-width:2px
+    linkStyle 2 stroke:#3FB950,stroke-width:2px
+    linkStyle 3 stroke:#F97316,stroke-width:2px
+    linkStyle 4 stroke:#F97316,stroke-width:2px
+```
 
 ## Install
 
@@ -33,16 +87,6 @@ return to the window, so no one ever copy-pastes a `CLAUDE.md` between repos aga
 
 For private or SSO-protected repos, add a token — see the
 [full setup guide](extension/README.md#setting-up-your-repository).
-
-## How updates work
-
-There are two independent update paths, and it's worth keeping them straight:
-
-- **Your setup files** are fetched from your repo at runtime. Push to your configured branch and
-  every developer's project picks up the change on the next sync — no extension release needed.
-- **The extension itself** is published to the VS Code Marketplace automatically by
-  [CI](.github/workflows/release.yml) on `v*` tag pushes, and updates through VS Code's built-in
-  extension updater.
 
 ## Repository structure
 

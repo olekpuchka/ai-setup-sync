@@ -6,12 +6,10 @@
 
 **One repo. Every project. Always in sync.**
 
-AI Setup Sync keeps your AI configuration — for Claude Code, GitHub Copilot, Cursor,
-Google Antigravity, Gemini CLI, OpenAI Codex, and more — identical across every project,
-automatically. Maintain it once in a GitHub repository; every developer's projects stay current
-on their own.
+Every AI coding tool needs its own config file in every repo. AI Setup Sync maintains yours once
+in a GitHub repository and distributes it automatically across every project — Claude Code, GitHub
+Copilot, Cursor, Google Antigravity, Gemini CLI, OpenAI Codex, and more. No copy-pasting.
 
-No more copy-pasting `CLAUDE.md` between repos, or wondering whose Cursor rules are out of date.
 Treat your AI setup like shared code: change it in one place, and it propagates everywhere.
 
 ---
@@ -52,14 +50,15 @@ detects those edits and lets them choose what to keep, so no work is ever silent
 
 ## Features
 
-- **Automatic sync** — pulls on project open and when you return focus to the window. No manual steps.
-- **Multi-tool support** — Claude Code, GitHub Copilot, Cursor, Google Antigravity, Gemini CLI, OpenAI Codex, and any custom path.
-- **Conflict resolution** — detects local edits and prompts per file, with a built-in diff viewer before anything is overwritten.
-- **Path mappings** — translate any repo path to the local path a tool expects (e.g. `Claude/` → `.claude/`), or map a whole subfolder to your project root with `"projectA": "/"`.
-- **Safe deletions** — files removed from the repo or excluded by a settings change are removed locally; your local edits are protected, and emptied directories are cleaned up.
+- **Syncs automatically** — pulls from your GitHub repo on project open and window focus. No manual steps.
+- **Protects your Intellectual Property** — your AI setup lives in your own private repository, syncs automatically into each project, and is excluded from git. Your instructions never touch a client's codebase.
+- **Supports every tool** — any file-based AI config works out of the box (Claude Code, Copilot, Cursor, and more). Custom path mappings cover anything else.
+- **Protects local edits** — detects local edits and prompts per file, with a built-in diff viewer before anything is overwritten.
+- **Maps paths flexibly** — translate any repo path to the local path a tool expects (e.g. `Claude/` → `.claude/`), or map a whole subfolder to your project root with `"projectA": "/"`.
+- **Handles deletions safely** — files removed from the repo or excluded by a settings change are removed locally; your local edits are protected, and emptied directories are cleaned up.
 - **Stays out of git** — synced files are added to `.git/info/exclude`, so they never clutter your pending changes.
-- **Private & SSO repos** — GitHub token stored securely in the OS keychain (VS Code SecretStorage).
-- **Configurable** — choose the branch, which folders to sync, and how conflicts resolve.
+- **Supports private and SSO repos** — GitHub token stored securely in the OS keychain (VS Code SecretStorage). SAML SSO orgs supported.
+- **Fully configurable** — choose the branch, which folders to sync, and how conflicts resolve.
 
 ## Requirements
 
