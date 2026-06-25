@@ -96,9 +96,9 @@ function readSettings(): Settings {
   };
 }
 
-/** Extracts the repo slug from a GitHub URL for the GitHub API. Returns null if the URL is invalid. */
+/** Extracts the repo slug (owner/name) from a repository URL. Accepts github.com and GitHub Enterprise Server URLs. Returns null if the URL is invalid. */
 function parseRepo(raw: string): string | null {
-  const m = raw.match(/^https?:\/\/github\.com\/([^/]+\/[^/]+?)(?:\.git)?\/?$/);
+  const m = raw.match(/^https?:\/\/[^/]+\/([^/]+\/[^/]+?)(?:\.git)?\/?$/);
   return m ? m[1] : null;
 }
 
@@ -207,7 +207,7 @@ async function runSync(
   }
 
   if (settings.repository && !parseRepo(settings.repository)) {
-    const msg = `AI Setup Sync: '${settings.repository}' is not a valid GitHub repository URL. Expected: https://github.com/your-org/your-repo`;
+    const msg = `AI Setup Sync: '${settings.repository}' is not a valid GitHub repository URL. Expected: https://github.com/your-org/your-repo or https://ghe.company.com/your-org/your-repo`;
     log(msg);
     setStatus("error", msg);
     if (interactive) {
@@ -431,7 +431,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         title: "AI Setup Sync: Set GitHub Token",
         prompt: existing
           ? "A token is already saved. Enter a new one to replace it, or leave blank to remove it."
-          : "Enter a classic GitHub personal access token with the 'repo' scope (fine-grained tokens don't support this scope). Required for private repos and SAML SSO-protected org repos.",
+          : "Enter a classic GitHub personal access token with the 'repo' scope (fine-grained tokens don't support this scope). Required for private repos, SAML SSO-protected orgs, and GitHub Enterprise Server.",
         password: true,
         placeHolder: "ghp_... or github_pat_...",
       });

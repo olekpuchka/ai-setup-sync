@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { gitBlobSha } from "./blobSha";
-import { getRawFile, getTree, RepoRef, TreeEntry } from "./github";
+import { getRawFile, getTree, RepoRef, TreeEntry, ConfigError, RateLimitError } from "./github";
 import { getState, saveState, SyncState } from "./state";
 import { computePatterns, upsertBlock } from "./gitignore";
 import { readRegistry, setWorkspaceFiles } from "./registry";
@@ -30,6 +30,9 @@ async function parallelLimit<T>(
   });
   await Promise.all(workers);
   if (errors.length > 0) {
+    // Surface typed errors (ConfigError, RateLimitError) directly so handleSyncError shows actionable UI.
+    const typed = errors.find((e) => e instanceof ConfigError || e instanceof RateLimitError);
+    if (typed) throw typed;
     const messages = errors.map((e) => (e instanceof Error ? e.message : String(e))).join("; ");
     throw new Error(`${errors.length} file(s) failed to sync: ${messages}`);
   }
@@ -430,7 +433,7 @@ export async function syncFolder(
   };
 
   // acknowledged is intentionally omitted — a full tree fetch means the repo
-  // changed, so prior "Keep all mine" acknowledgements no longer apply.
+  // changed, so prior "Keep mine for now" acknowledgements no longer apply.
   const newState: SyncState = {
     ref: repoRef.ref,
     repoUrl: repoRef.url,
@@ -730,7 +733,7 @@ async function closeFileDiff(localPath: string): Promise<void> {
  * Decides which conflicting files get overwritten, honoring the policy.
  * `wasDismissed` is true when the user pressed Escape/X without choosing —
  * the caller uses this to avoid caching the tree ETag so the dialog re-appears
- * on the next sync. An explicit "Keep all mine" is not a dismissal.
+ * on the next sync. An explicit "Keep mine for now" is not a dismissal.
  */
 async function resolveConflicts(
   conflicts: PlannedFile[],
@@ -759,7 +762,7 @@ async function resolveConflicts(
       { modal: true },
       "Review each",
       "Overwrite all",
-      "Keep all mine"
+      "Keep mine for now"
     );
 
     if (choice === undefined) {
@@ -769,7 +772,7 @@ async function resolveConflicts(
       conflicts.forEach((c) => overwrite.add(c.localPath));
       return { shouldOverwrite: (p) => overwrite.has(p), wasDismissed: false };
     }
-    if (choice === "Keep all mine") {
+    if (choice === "Keep mine for now") {
       return noop;
     }
     // "Review each" — fall through to per-file loop.
@@ -809,9 +812,13 @@ async function resolveConflicts(
           );
         }
         if (per === "Show diff") {
-          await showFileDiff(c, repoRef, workspaceFolder);
-          currentDiff = c.localPath;
-          diffShown = true;
+          try {
+            await showFileDiff(c, repoRef, workspaceFolder);
+            currentDiff = c.localPath;
+            diffShown = true;
+          } catch (diffErr) {
+            void vscode.window.showErrorMessage(diffErr instanceof Error ? diffErr.message : String(diffErr));
+          }
           continue;
         }
         break;

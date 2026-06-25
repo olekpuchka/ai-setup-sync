@@ -2,7 +2,7 @@
   "name": "ai-setup-sync",
   "displayName": "AI Setup Sync",
   "description": "Sync AI setup files — Claude Code, GitHub Copilot, Cursor, Gemini CLI, OpenAI Codex, and more — across every project from a shared GitHub repository, automatically.",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "publisher": "olekpuchka",
   "author": {
     "name": "Olek Puchka"
@@ -69,7 +69,7 @@
           "order": 1,
           "type": "string",
           "default": "",
-          "markdownDescription": "GitHub repository URL to sync setup files from, e.g. `https://github.com/your-org/your-repo`. Private repos and SAML SSO org repos require a **classic** personal access token with the `repo` scope — [Set GitHub Token](command:aiSetupSync.setGitHubToken)."
+          "markdownDescription": "GitHub repository URL to sync setup files from, e.g. `https://github.com/your-org/your-repo`. GitHub Enterprise Server URLs are also supported. Private repos, SSO orgs, and Enterprise Server require a **classic** token with the `repo` scope — [Set GitHub Token](command:aiSetupSync.setGitHubToken)."
         },
         "aiSetupSync.branch": {
           "order": 2,

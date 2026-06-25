@@ -4,6 +4,23 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.4.0] — 2026-06-25
+
+### Added
+
+- **GitHub Enterprise Server support** — set `aiSetupSync.repository` to any GitHub Enterprise Server URL (e.g. `https://github.company.com/your-org/your-repo`). API calls are automatically routed to the instance's `/api/v3` endpoint. A token with the `repo` scope is required for Enterprise Server repos.
+
+### Changed
+
+- **"Keep mine for now" conflict button** — the bulk conflict dialog button was renamed from "Keep all mine" to "Keep mine for now" to better reflect that the choice is per-sync, not permanent.
+
+### Fixed
+
+- **Conflict dialog survives a failed diff fetch** — clicking "Show diff" during conflict resolution no longer aborts the entire conflict loop if the remote file can't be fetched (e.g. missing token on an Enterprise Server repo). The error is shown as a toast and the dialog re-appears so you can still choose Overwrite or Keep mine for now.
+- **Actionable error UI after parallel download failure** — when a file download fails with a token or auth error inside a parallel batch, the "Set GitHub Token" button now correctly appears instead of a generic error message.
+
+---
+
 ## [1.3.2] — 2026-06-25
 
 ### Changed

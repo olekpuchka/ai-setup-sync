@@ -84,7 +84,7 @@ flowchart LR
 2. Set `aiSetupSync.repository` to your GitHub repository URL in VS Code **user** settings.
 3. Open a project — sync runs automatically.
 
-For private or SSO-protected repos, add a token — see the
+For private repos, SSO-protected orgs, or GitHub Enterprise Server, add a token — see the
 [full setup guide](extension/README.md#setting-up-your-repository).
 
 ## Contributing

@@ -20,6 +20,21 @@ export interface RepoRef {
 
 const USER_AGENT = "ai-setup-sync";
 
+/**
+ * Returns the GitHub API base URL for a given repo URL.
+ * github.com repos use `https://api.github.com`; GitHub Enterprise Server repos use `https://HOSTNAME/api/v3`.
+ */
+function apiBase(repoUrl: string): string {
+  try {
+    const { hostname } = new URL(repoUrl);
+    return hostname === "github.com"
+      ? "https://api.github.com"
+      : `https://${hostname}/api/v3`;
+  } catch {
+    return "https://api.github.com";
+  }
+}
+
 /** Encodes each segment of an `owner/name` slug for use in URLs. */
 function encodeRepoSlug(repo: string): string {
   const slash = repo.indexOf("/");
@@ -186,7 +201,7 @@ async function getJson(
   if (status === 404) {
     if (!token) {
       throw new ConfigError(
-        `Repository not found. If this is a private repository, set a GitHub token with the \`repo\` scope.`,
+        `Repository not found. If this is a private repo, SSO-protected org, or GitHub Enterprise Server instance, set a GitHub token with the \`repo\` scope.`,
         true,
         undefined,
         "not-found"
@@ -218,10 +233,11 @@ export interface TreeResult {
  * cheap `304` (and `notModified: true`) when nothing changed.
  */
 export async function getTree(
-  { repo, ref, token }: RepoRef,
+  { repo, ref, token, url: repoUrl }: RepoRef,
   etag?: string
 ): Promise<TreeResult> {
-  const url = `https://api.github.com/repos/${encodeRepoSlug(repo)}/git/trees/${encodeURIComponent(ref)}?recursive=1`;
+  const base = apiBase(repoUrl);
+  const url = `${base}/repos/${encodeRepoSlug(repo)}/git/trees/${encodeURIComponent(ref)}?recursive=1`;
   let res: Awaited<ReturnType<typeof getJson>>;
   try {
     res = await getJson(url, token, etag);
@@ -229,7 +245,7 @@ export async function getTree(
     if (err instanceof ConfigError && err.kind === "not-found") {
       // Follow-up call to distinguish branch vs repo URL vs token issue.
       try {
-        await getJson(`https://api.github.com/repos/${encodeRepoSlug(repo)}`, token);
+        await getJson(`${base}/repos/${encodeRepoSlug(repo)}`, token);
         // Repo returned 200 — it exists, so the branch is the problem.
         throw new ConfigError(
           `Branch "${ref}" not found — check the branch name in settings.`,
@@ -242,7 +258,7 @@ export async function getTree(
         // Repo check also failed — either no token or wrong URL.
         if (repoErr.needsToken) {
           throw new ConfigError(
-            `Repository not found — if this is a private repo, set a GitHub token with the repo scope.`,
+            `Repository not found — set a GitHub token with the \`repo\` scope for private repos, SSO-protected orgs, and GitHub Enterprise Server.`,
             true
           );
         }
@@ -272,15 +288,13 @@ export async function getTree(
 
 /** Fetches a single file's raw bytes. */
 export async function getRawFile(
-  { repo, ref, token }: RepoRef,
+  { repo, ref, token, url: repoUrl }: RepoRef,
   path: string
 ): Promise<Buffer> {
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
   if (token) {
-    // Authenticated path (works for private repos): contents API with raw accept.
-    const url = `https://api.github.com/repos/${encodeRepoSlug(repo)}/contents/${path
-      .split("/")
-      .map(encodeURIComponent)
-      .join("/")}?ref=${encodeURIComponent(ref)}`;
+    // Authenticated path (works for private repos and GitHub Enterprise Server): contents API with raw accept.
+    const url = `${apiBase(repoUrl)}/repos/${encodeRepoSlug(repo)}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`;
     const { status, body } = await requestWithRetry(url, {
       Accept: "application/vnd.github.raw",
       "X-GitHub-Api-Version": "2022-11-28",
@@ -291,10 +305,15 @@ export async function getRawFile(
     }
     return body;
   }
-  const url = `https://raw.githubusercontent.com/${encodeRepoSlug(repo)}/${encodeURIComponent(ref)}/${path
-    .split("/")
-    .map(encodeURIComponent)
-    .join("/")}`;
+  // Unauthenticated raw access is only available on github.com.
+  const { hostname } = new URL(repoUrl);
+  if (hostname !== "github.com") {
+    throw new ConfigError(
+      `A GitHub token is required to sync from GitHub Enterprise Server (${hostname}). Set a token with the \`repo\` scope.`,
+      true
+    );
+  }
+  const url = `https://raw.githubusercontent.com/${encodeRepoSlug(repo)}/${encodeURIComponent(ref)}/${encodedPath}`;
   const { status, body } = await requestWithRetry(url, {});
   if (status < 200 || status >= 300) {
     throw new Error(`Failed to fetch ${path} (HTTP ${status}).`);

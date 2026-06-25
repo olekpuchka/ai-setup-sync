@@ -48,7 +48,7 @@ extension/
 ├── src/
 │   ├── extension.ts      — activation, commands, status bar, polling
 │   ├── sync.ts           — core sync logic: diff, conflict resolution, write
-│   ├── github.ts         — GitHub API: tree, file fetch, rate-limit/SSO handling
+│   ├── github.ts         — GitHub API: tree, file fetch, rate-limit/SSO/Enterprise Server handling
 │   ├── token.ts          — SecretStorage helpers for the GitHub PAT
 │   ├── state.ts          — per-workspace persisted SHA map (globalState)
 │   ├── registry.ts       — cross-workspace file registry (for uninstall hook)

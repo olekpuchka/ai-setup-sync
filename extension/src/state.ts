@@ -14,7 +14,7 @@ export interface SyncState {
   /** repo-relative path -> git blob SHA we last wrote to disk */
   files: Record<string, string>;
   /**
-   * Paths the user said "Keep all mine" on during a 304 local-modification check,
+   * Paths the user said "Keep mine for now" on during a 304 local-modification check,
    * mapped to the local blob SHA at that moment. We skip re-prompting while the
    * local SHA is unchanged. Cleared when the repo tree changes (full sync).
    */
