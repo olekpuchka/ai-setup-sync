@@ -252,7 +252,7 @@ async function runSync(
             if (removed.keptPaths.length > 0) {
               log(`Kept ${removed.keptPaths.length} file(s) with local edits during repo change:`);
               for (const rel of removed.keptPaths) {
-                log(`  ${folder.name}/${rel}`);
+                log(`  ${folder.name}/${rel} (kept — your edits)`);
               }
             }
           }
@@ -379,13 +379,13 @@ async function removeSyncedFiles(context: vscode.ExtensionContext): Promise<void
     if (deleted > 0) {
       log(`Removed ${deleted} synced file(s):`);
       for (const { folder, rel } of allDeletedPaths) {
-        log(`  ${folder.name}/${rel}`);
+        log(`  ${folder.name}/${rel} (deleted)`);
       }
     }
     if (kept > 0) {
       log(`Kept ${kept} file(s) with local edits:`);
       for (const { folder, rel } of allKeptPaths) {
-        log(`  ${folder.name}/${rel}`);
+        log(`  ${folder.name}/${rel} (kept — your edits)`);
       }
     }
   } else {

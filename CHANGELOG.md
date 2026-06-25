@@ -4,6 +4,14 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.4.2] — 2026-06-25
+
+### Fixed
+
+- **Output log status labels** — file lines in the Output panel now consistently show a status tag at the end of each line (`(deleted)`, `(kept — your edits)`) when using the Remove Synced Files command or during repo-change cleanup, matching the format used by regular sync (`(added)`, `(updated)`, `(deleted)`).
+
+---
+
 ## [1.4.1] — 2026-06-25
 
 ### Changed
