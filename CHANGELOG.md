@@ -4,6 +4,14 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.5.5] — 2026-07-09
+
+### Added
+
+- **MCP configs synced across all tools** — added `.vscode/mcp.json` (VS Code / GitHub Copilot) to the defaults. MCP server configs now sync out of the box for Claude Code, Copilot, and Cursor. Only `mcp.json` is synced from `.vscode`, not the rest of your editor settings.
+
+---
+
 ## [1.5.4] — 2026-07-02
 
 ### Added
