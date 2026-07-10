@@ -98,9 +98,11 @@ your-setup-repo/
 ├── .cursor/
 │   └── rules/
 │       └── coding-style.mdc           # Cursor rules
+├── .cursorignore                      # Cursor: files the AI can't access
 ├── .agents/
 │   └── skills/
 │       └── code-review.md             # Google Antigravity skills
+├── .antigravity.md                    # Google Antigravity workspace context
 └── .codex/
     └── config.toml                    # OpenAI Codex config
 ```
@@ -147,9 +149,13 @@ By default, the extension syncs these paths from the `main` branch (configurable
 | `CLAUDE.md` | Claude Code |
 | `.mcp.json` | Claude Code (project-scoped MCP servers) |
 | `.github` | GitHub Copilot |
+| `.vscode/mcp.json` | GitHub Copilot / VS Code (MCP servers) |
 | `.cursor` | Cursor |
+| `.cursorignore` | Cursor (blocks AI access) |
+| `.cursorindexingignore` | Cursor (excludes from indexing) |
 | `.agents` | Google Antigravity |
 | `AGENTS.md` | Google Antigravity (also read by Cursor and Claude Code) |
+| `.antigravity.md` | Google Antigravity (Antigravity-specific context) |
 | `.codex` | OpenAI Codex |
 
 Configure via `aiSetupSync.targetFolders` — toggle defaults on or off, or add custom paths.

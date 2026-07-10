@@ -4,6 +4,15 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.5.7] — 2026-07-10
+
+### Added
+
+- **`.antigravity.md` synced by default** — Google Antigravity (IDE and CLI share config) reads an Antigravity-specific project context file, `.antigravity.md`, which takes precedence over the legacy `GEMINI.md` when both exist. It's now included in the default `targetFolders` alongside `.agents` and `AGENTS.md`, completing Antigravity support.
+- **Cursor ignore files synced by default** — added `.cursorignore` (files the AI cannot access) and `.cursorindexingignore` (files excluded from indexing). These live at the repo root rather than inside `.cursor/`, so they weren't previously covered. Syncing them lets you standardize AI file-access rules — e.g. blocking `.env`, keys, and build artifacts — across every project.
+
+---
+
 ## [1.5.6] — 2026-07-10
 
 ### Changed

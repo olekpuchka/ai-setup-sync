@@ -2,7 +2,7 @@
   "name": "ai-setup-sync",
   "displayName": "AI Setup Sync",
   "description": "Sync AI setup files — Claude Code, GitHub Copilot, Cursor, Google Antigravity, OpenAI Codex, and more — across every project from a shared GitHub repository, automatically.",
-  "version": "1.5.6",
+  "version": "1.5.7",
   "publisher": "olekpuchka",
   "author": {
     "name": "Olek Puchka"
@@ -90,9 +90,12 @@
             ".github": true,
             ".vscode/mcp.json": true,
             ".cursor": true,
+            ".cursorignore": true,
+            ".cursorindexingignore": true,
             ".codex": true,
             ".agents": true,
-            "AGENTS.md": true
+            "AGENTS.md": true,
+            ".antigravity.md": true
           },
           "markdownDescription": "Files and folders to sync from the repo root. Toggle entries on or off, or add custom paths for any tool that reads config from your project. Defaults cover Claude Code, GitHub Copilot, Cursor, Google Antigravity, and OpenAI Codex, including their MCP configs."
         },

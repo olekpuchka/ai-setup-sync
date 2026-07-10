@@ -70,9 +70,11 @@ const DEFAULT_TARGET_FOLDERS = [
   // GitHub Copilot / VS Code
   ".github", ".vscode/mcp.json",
   // Cursor
-  ".cursor",
-  // OpenAI Codex + shared agent standard (also used by Google Antigravity CLI)
+  ".cursor", ".cursorignore", ".cursorindexingignore",
+  // OpenAI Codex + shared agent standard
   ".codex", ".agents", "AGENTS.md",
+  // Google Antigravity
+  ".antigravity.md",
 ];
 const DEFAULT_TARGET_MAP: Record<string, boolean> = Object.fromEntries(DEFAULT_TARGET_FOLDERS.map((f) => [f, true]));
 
