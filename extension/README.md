@@ -9,7 +9,7 @@
 
 Every AI coding tool needs its own config files in every repo. AI Setup Sync maintains yours once
 in a GitHub repository and distributes it automatically across every project — Claude Code, GitHub
-Copilot, Cursor, Google Antigravity, Gemini CLI, OpenAI Codex, and more. No copy-pasting.
+Copilot, Cursor, Google Antigravity, OpenAI Codex, and more. No copy-pasting.
 
 Treat your AI setup like shared code: change it in one place, and it propagates everywhere.
 
@@ -101,9 +101,6 @@ your-setup-repo/
 ├── .agents/
 │   └── skills/
 │       └── code-review.md             # Google Antigravity skills
-├── .gemini/
-│   └── settings.json                  # Gemini CLI config
-├── GEMINI.md                          # Gemini CLI workspace context
 └── .codex/
     └── config.toml                    # OpenAI Codex config
 ```
@@ -153,8 +150,6 @@ By default, the extension syncs these paths from the `main` branch (configurable
 | `.cursor` | Cursor |
 | `.agents` | Google Antigravity |
 | `AGENTS.md` | Google Antigravity (also read by Cursor and Claude Code) |
-| `.gemini` | Gemini CLI |
-| `GEMINI.md` | Gemini CLI |
 | `.codex` | OpenAI Codex |
 
 Configure via `aiSetupSync.targetFolders` — toggle defaults on or off, or add custom paths.

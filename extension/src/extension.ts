@@ -71,10 +71,8 @@ const DEFAULT_TARGET_FOLDERS = [
   ".github", ".vscode/mcp.json",
   // Cursor
   ".cursor",
-  // OpenAI Codex + shared agent standard
+  // OpenAI Codex + shared agent standard (also used by Google Antigravity CLI)
   ".codex", ".agents", "AGENTS.md",
-  // Gemini CLI
-  ".gemini", "GEMINI.md",
 ];
 const DEFAULT_TARGET_MAP: Record<string, boolean> = Object.fromEntries(DEFAULT_TARGET_FOLDERS.map((f) => [f, true]));
 

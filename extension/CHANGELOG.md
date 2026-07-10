@@ -4,6 +4,22 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.5.6] — 2026-07-10
+
+### Changed
+
+- **Gemini CLI → Google Antigravity** — dropped the deprecated `.gemini` and `GEMINI.md` defaults. Google is [retiring Gemini CLI on June 18, 2026](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/); its successor, Antigravity CLI, reads project config from `.agents/` and `AGENTS.md` — both already synced by default — so migrating users are covered with no change. Enterprise users still on Gemini CLI can re-add the old paths via `"aiSetupSync.targetFolders": { ".gemini": true, "GEMINI.md": true }`.
+
+---
+
+## [1.5.5] — 2026-07-09
+
+### Added
+
+- **MCP configs synced across all tools** — added `.vscode/mcp.json` (VS Code / GitHub Copilot) to the defaults. MCP server configs now sync out of the box for Claude Code, Copilot, and Cursor. Only `mcp.json` is synced from `.vscode`, not the rest of your editor settings.
+
+---
+
 ## [1.5.4] — 2026-07-02
 
 ### Added

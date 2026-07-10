@@ -11,7 +11,7 @@
 
 Every AI coding tool needs its own config files in every repo. AI Setup Sync maintains yours once
 in a GitHub repository and distributes it automatically across every project — Claude Code, GitHub
-Copilot, Cursor, Google Antigravity, Gemini CLI, OpenAI Codex, and more. No copy-pasting.
+Copilot, Cursor, Google Antigravity, OpenAI Codex, and more. No copy-pasting.
 
 > 📖 For installation, settings, path mappings, conflict handling, and the FAQ, see **[extension/README.md](extension/README.md)**.
 
