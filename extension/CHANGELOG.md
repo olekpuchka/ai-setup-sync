@@ -4,6 +4,14 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.5.8] — 2026-07-11
+
+### Changed
+
+- **New extension logo** — refreshed the icon to a transparent, theme-adaptive mark (blue→purple sync arrows around a `{ ⋮ }` core). It's a proper 256×256 PNG with no background, so it reads cleanly in both light and dark VS Code themes and on the Marketplace.
+
+---
+
 ## [1.5.7] — 2026-07-10
 
 ### Added
