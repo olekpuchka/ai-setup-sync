@@ -4,6 +4,15 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.6.0] — 2026-07-12
+
+### Added
+
+- **Status-bar action menu** — clicking the **AI Setup Sync** status-bar item now opens a quick-pick menu — **Sync Now**, **Show Log**, **Open Settings**, **Remove Synced Files**, **Set GitHub Token** — instead of syncing immediately. Sync Now is the first (default) item, so a click + Enter still syncs. The menu's header line shows status at a glance: when you last synced, how many files, and from which repo. Every command is now reachable without the Command Palette.
+- **Sync progress notification** — a sync that downloads files now shows a progress notification with a bar that fills as it goes and a live **"Syncing X of Y files"** count. It appears only while files are actually being transferred, so routine no-op syncs on window focus stay silent.
+
+---
+
 ## [1.5.8] — 2026-07-11
 
 ### Changed

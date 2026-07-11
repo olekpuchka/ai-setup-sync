@@ -43,6 +43,8 @@ interface SyncOptions {
   targetFolders: string[];
   /** Maps repo-relative source paths to workspace-relative destination paths. */
   pathMappings: Record<string, string>;
+  /** Called after each file is downloaded, so callers can show sync progress. */
+  onProgress?: (done: number, total: number) => void;
 }
 
 interface SyncResult {
@@ -223,12 +225,14 @@ export async function syncFolder(
     // Restore missing files (re-fetch from raw — no API cost).
     let addedCount = 0;
     if (missing.length > 0) {
+      let done = 0;
       await parallelLimit(missing, DOWNLOAD_CONCURRENCY, async ({ repoPath, localPath }) => {
         const bytes = await getRawFile(repoRef, repoPath);
         const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, localPath);
         const parentUri = vscode.Uri.joinPath(fileUri, "..");
         await vscode.workspace.fs.createDirectory(parentUri);
         await vscode.workspace.fs.writeFile(fileUri, bytes);
+        options.onProgress?.(++done, missing.length);
       });
       addedCount = missing.length;
       // Keep registry + gitignore in sync after restore.
@@ -273,6 +277,7 @@ export async function syncFolder(
       toKeep = locallyModified.filter((p) => !resolution.shouldOverwrite(p.localPath));
 
       // Always write files the user approved, even if they escaped on a later file.
+      let done = 0;
       await parallelLimit(toOverwrite, DOWNLOAD_CONCURRENCY, async (p) => {
         const bytes = await getRawFile(repoRef, p.entry.path);
         const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, p.localPath);
@@ -280,6 +285,7 @@ export async function syncFolder(
         await vscode.workspace.fs.createDirectory(parentUri);
         await vscode.workspace.fs.writeFile(fileUri, bytes);
         delete newAcknowledged[p.entry.path];
+        options.onProgress?.(++done, toOverwrite.length);
       });
       updatedCount = toOverwrite.length;
 
@@ -523,12 +529,14 @@ export async function syncFolder(
   // Write files; save state even on partial failure so progress is not lost (BUG-4).
   let syncError: unknown;
   try {
+    let writeProgress = 0;
     await parallelLimit(toWrite, DOWNLOAD_CONCURRENCY, async (p) => {
       const bytes = await getRawFile(repoRef, p.entry.path);
       const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, p.localPath);
       const parentUri = vscode.Uri.joinPath(fileUri, "..");
       await vscode.workspace.fs.createDirectory(parentUri);
       await vscode.workspace.fs.writeFile(fileUri, bytes);
+      options.onProgress?.(++writeProgress, toWrite.length);
       // OPT-2: the tree API already returns the blob SHA — no need to recompute it.
       newState.files[p.entry.path] = p.entry.sha;
       if (p.classification === "new") {

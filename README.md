@@ -23,6 +23,7 @@ Copilot, Cursor, Google Antigravity, OpenAI Codex, and more. No copy-pasting.
 - **Protects local edits** — detects files you've changed and prompts before overwriting, with a built-in diff.
 - **Stays out of git** — synced files are added to `.git/info/exclude` so they don't clutter your changes. If you edit one locally, it surfaces in Source Control automatically so you can see the diff.
 - **Works across parallel agent sessions** — synced configs are automatically available in every Claude Code and Codex worktree, so AI tools have your setup no matter which isolated session they run in.
+- **Stays out of your way** — a status-bar item shows sync state and opens a quick action menu; larger syncs show a live progress notification, and routine background syncs stay silent.
 
 ## How it works
 

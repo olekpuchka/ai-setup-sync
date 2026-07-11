@@ -39,19 +39,19 @@ function setStatus(
   switch (state) {
     case "syncing":
       statusBar.text = "$(sync~spin) AI Setup Sync";
-      statusBar.tooltip = "Syncing…";
+      statusBar.tooltip = "Syncing";
       statusBar.backgroundColor = undefined;
       break;
     case "error":
       statusBar.text = "$(warning) AI Setup Sync";
-      statusBar.tooltip = `Sync failed: ${detail ?? "unknown error"}\nClick to retry.`;
+      statusBar.tooltip = `Sync failed: ${detail ?? "unknown error"}\nClick for actions.`;
       statusBar.backgroundColor = new vscode.ThemeColor(
         "statusBarItem.warningBackground"
       );
       break;
     case "unconfigured":
       statusBar.text = "$(gear) AI Setup Sync";
-      statusBar.tooltip = "No repository configured. Click to set up.";
+      statusBar.tooltip = "No repository configured. Click for actions.";
       statusBar.backgroundColor = undefined;
       break;
     default:
@@ -59,9 +59,137 @@ function setStatus(
       statusBar.tooltip =
         (lastSyncSuccessAt ? `Synced ${relativeTime(lastSyncSuccessAt)}` : "Ready") +
         (detail ? ` • ${detail}` : "") +
-        "\nClick to sync now.";
+        "\nClick for actions.";
       statusBar.backgroundColor = undefined;
   }
+}
+
+/**
+ * A progress notification for a sync run, created lazily on the first downloaded
+ * file so no-op focus syncs never pop it. Shows a determinate bar that fills
+ * left→right with a running "X of Y files" count. `onProgress` is called once per
+ * downloaded file (with that file's position within its phase); `finish` closes
+ * the popup when the run ends.
+ *
+ * A sync can run several download phases (restore missing, overwrite conflicts,
+ * write new) across one or more workspace folders, each reporting its own 1..N
+ * sequence. Each phase is folded into a cumulative total so the count climbs
+ * monotonically, and the bar only ever advances — a later phase that enlarges the
+ * total holds the bar rather than rewinding it.
+ */
+function createSyncProgress(): {
+  onProgress: (done: number, total: number) => void;
+  finish: () => void;
+} {
+  let started = false;
+  let reporter: vscode.Progress<{ message?: string; increment?: number }> | undefined;
+  // Resolve the notification's promise; captured synchronously here (not inside the
+  // withProgress callback) so finish() closes the popup regardless of when VS Code
+  // invokes that callback.
+  let resolveDone!: () => void;
+  const donePromise = new Promise<void>((resolve) => {
+    resolveDone = resolve;
+  });
+  let completed = 0; // files actually downloaded so far (monotonic)
+  let phaseBase = 0; // completed count when the current phase began
+  let lastPct = 0;
+
+  const onProgress = (done: number, total: number): void => {
+    if (!started) {
+      started = true;
+      void vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: "AI Setup Sync" },
+        (p) => {
+          reporter = p;
+          return donePromise;
+        }
+      );
+    }
+    if (done === 1) {
+      // A new phase started (each phase's counter restarts at 1). Fold the files
+      // actually completed so far into the base — using the real count, not the
+      // previous phase's declared total, so a partially-failed phase doesn't inflate it.
+      phaseBase = completed;
+    }
+    completed = phaseBase + done;
+    const cumTotal = phaseBase + total; // `total` is constant within a phase
+    const pct = cumTotal > 0 ? (completed / cumTotal) * 100 : 0;
+    const increment = Math.max(0, pct - lastPct); // advance only — never rewind
+    lastPct = pct;
+    const noun = cumTotal === 1 ? "file" : "files";
+    reporter?.report({ message: `Syncing ${completed} of ${cumTotal} ${noun}`, increment });
+  };
+
+  const finish = (): void => {
+    resolveDone();
+  };
+
+  return { onProgress, finish };
+}
+
+/** Total count of files this extension is currently managing across open workspace folders. */
+function syncedFileCount(): number {
+  const reg = readRegistry();
+  let total = 0;
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    total += Object.keys(reg.workspaces[folder.uri.fsPath]?.files ?? {}).length;
+  }
+  return total;
+}
+
+/** Opens the status-bar action menu — the extension's main interactive surface. */
+async function showMenu(context: vscode.ExtensionContext): Promise<void> {
+  const settings = readSettings();
+
+  let detail: string;
+  if (!settings.repository) {
+    detail = "No repository configured";
+  } else {
+    const slug = parseRepo(settings.repository);
+    const count = syncedFileCount();
+    const when = lastSyncSuccessAt ? `Synced ${relativeTime(lastSyncSuccessAt)}` : "Not synced yet";
+    const files = count > 0 ? ` · ${count} file${count === 1 ? "" : "s"}` : "";
+    const from = slug ? ` from ${slug}` : "";
+    detail = `${when}${files}${from}`;
+  }
+
+  interface MenuItem extends vscode.QuickPickItem {
+    run: () => void | Promise<void>;
+  }
+
+  const items: MenuItem[] = [
+    {
+      label: "$(sync) Sync Now",
+      description: "Pull the latest setup files",
+      run: () => runSync(context, true),
+    },
+    {
+      label: "$(output) Show Log",
+      description: "Open the AI Setup Sync output channel",
+      run: () => showOutput(),
+    },
+    {
+      label: "$(gear) Open Settings",
+      description: "Repository, branch, target folders, path mappings",
+      run: () => vscode.commands.executeCommand("workbench.action.openSettings", `@ext:${context.extension.id}`),
+    },
+    {
+      label: "$(trash) Remove Synced Files",
+      description: "Delete files this extension has synced",
+      run: () => removeSyncedFiles(context),
+    },
+    {
+      label: "$(key) Set GitHub Token",
+      description: "For private repos, SSO orgs, or Enterprise",
+      run: () => vscode.commands.executeCommand(`${CONFIG}.setGitHubToken`),
+    },
+  ];
+
+  const pick = await vscode.window.showQuickPick(items, {
+    title: "AI Setup Sync",
+    placeHolder: detail,
+  });
+  await pick?.run();
 }
 
 const DEFAULT_TARGET_FOLDERS = [
@@ -322,6 +450,8 @@ async function runSync(
     return;
   }
 
+  const syncProgress = createSyncProgress();
+
   const runSyncFolders = async (repoRef: RepoRef) => {
     const summaries: string[] = [];
     let changed = false;
@@ -371,6 +501,7 @@ async function runSync(
             repoRef,
             targetFolders: settings.targetFolders,
             pathMappings: settings.pathMappings,
+            onProgress: syncProgress.onProgress,
           }
         );
         // Refresh the file watcher so edits to managed files surface in git immediately.
@@ -443,6 +574,7 @@ async function runSync(
     // instead of spinning forever on "syncing".
     handleSyncError(err, interactive);
   } finally {
+    syncProgress.finish();
     syncing = false;
   }
 }
@@ -531,7 +663,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   log(`Activated. Source: ${settings.repository || "(unconfigured)"}@${settings.branch}.`);
 
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  statusBar.command = `${CONFIG}.syncNow`;
+  statusBar.command = `${CONFIG}.showMenu`;
   setStatus(settings.repository ? "idle" : "unconfigured");
   statusBar.show();
   context.subscriptions.push(statusBar);
@@ -549,6 +681,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand(`${CONFIG}.showMenu`, () =>
+      showMenu(context)
+    ),
     vscode.commands.registerCommand(`${CONFIG}.syncNow`, () =>
       runSync(context, true)
     ),

@@ -2,7 +2,7 @@
   "name": "ai-setup-sync",
   "displayName": "AI Setup Sync",
   "description": "Sync AI setup files — Claude Code, GitHub Copilot, Cursor, Google Antigravity, OpenAI Codex, and more — across every project from a shared GitHub repository, automatically.",
-  "version": "1.5.8",
+  "version": "1.6.0",
   "publisher": "olekpuchka",
   "author": {
     "name": "Olek Puchka"

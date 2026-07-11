@@ -61,6 +61,7 @@ detects those edits and lets them choose what to keep, so no work is ever silent
 - **Works across parallel agent sessions** — synced configs are automatically available in every Claude Code and Codex worktree, so AI tools have your setup no matter which isolated session they run in.
 - **Supports private, SSO, and Enterprise Server repos** — GitHub token stored securely in the OS keychain (VS Code SecretStorage).
 - **Fully configurable** — choose the branch and which folders to sync.
+- **One-click status bar** — a status-bar item shows sync state and opens an action menu (Sync Now, Show Log, Open Settings, Remove Synced Files, Set GitHub Token); larger syncs show a live progress notification.
 
 ## Requirements
 
@@ -335,27 +336,37 @@ deletions are removed automatically.
 ## Status bar
 
 Look for **AI Setup Sync** in the status bar (bottom-right of the VS Code window). It shows sync
-state at a glance; click it to sync immediately.
+state at a glance; click it to open the **action menu** (Sync Now, Show Log, Open Settings, Remove
+Synced Files, Set GitHub Token). Sync Now is the first item, so a click + Enter syncs immediately.
 
 | Indicator | Meaning |
 | --- | --- |
 | `✓ AI Setup Sync` | Up to date — last sync completed successfully. |
 | `⟳ AI Setup Sync` | Sync in progress. |
-| `⚠ AI Setup Sync` | Sync failed — hover to see the error, click to retry. |
-| `⚙ AI Setup Sync` | No repository configured — click to open settings. |
+| `⚠ AI Setup Sync` | Sync failed — hover to see the error, click for the action menu. |
+| `⚙ AI Setup Sync` | No repository configured — click for the action menu. |
+
+When a sync downloads files, a progress notification with a bar and a live **"Syncing X of Y
+files"** count appears — only while files are actually being transferred, so routine no-op syncs
+stay silent.
 
 ## Commands
 
-All commands are under the **AI Setup Sync** category in the command palette
-(`Ctrl+Shift+P` / `Cmd+Shift+P`).
+Every action is available from the status-bar **action menu**. **Sync Now**, **Remove Synced
+Files**, and **Set GitHub Token** are also in the command palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
+under the **AI Setup Sync** category; **Show Log** and **Open Settings** are menu-only shortcuts to
+VS Code's own actions.
 
-| Command | Description |
+| Action | Description |
 | --- | --- |
 | **Sync Now** | Sync immediately. |
+| **Show Log** | Open the **AI Setup Sync** output channel. |
+| **Open Settings** | Open the extension's settings. |
 | **Remove Synced Files** | Delete synced files from the project (local edits are preserved). |
 | **Set GitHub Token** | Securely store a GitHub PAT in the OS keychain (required for private repos, SAML SSO org repos, and Enterprise Server repos). Use a **classic** token with the **`repo`** scope; for SAML SSO orgs, also authorize it via *Settings → Personal access tokens → Configure SSO*. Submit empty to clear. |
 
-Activity is logged to the **AI Setup Sync** output channel (Output panel → dropdown).
+Activity is logged to the **AI Setup Sync** output channel (Output panel → dropdown, or **Show
+Log** from the menu).
 
 ## How files stay out of git
 
@@ -405,8 +416,9 @@ locally are kept so no work is lost. If any files are kept, a warning toast appe
 **When does it sync?**
 Automatically: when you open a project, when you return focus to the VS Code window (throttled so
 rapid window-switching doesn't re-sync), and shortly after you change a relevant setting or set a
-GitHub token. You can also sync on demand any time with **Sync Now** or by clicking the status bar.
-There's no schedule to configure — it just stays current at the moments you're working.
+GitHub token. You can also sync on demand any time with **Sync Now** — from the status-bar action
+menu or the command palette. There's no schedule to configure — it just stays current at the
+moments you're working.
 
 **Does it ever modify files I created myself?**
 No. The extension only touches files it synced from the repo. Anything else in your project is left
