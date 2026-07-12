@@ -25,6 +25,7 @@ Treat your AI setup like shared code: change it in one place, and it propagates 
 - [Default synced paths](#default-synced-paths)
 - [Settings](#settings)
 - [Path mappings & multi-project repos](#path-mappings--multi-project-repos)
+- [Post-sync command](#post-sync-command)
 - [Conflict handling](#conflict-handling)
 - [Status bar](#status-bar)
 - [Commands](#commands)
@@ -62,6 +63,7 @@ detects those edits and lets them choose what to keep, so no work is ever silent
 - **Supports private, SSO, and Enterprise Server repos** — GitHub token stored securely in the OS keychain (VS Code SecretStorage).
 - **Fully configurable** — choose the branch and which folders to sync.
 - **One-click status bar** — a status-bar item shows sync state and opens an action menu (Sync Now, Show Log, Open Settings, Remove Synced Files, Set GitHub Token); larger syncs show a live progress notification.
+- **Runs your build step** — an optional post-sync command turns synced templates into finished configs (generate, inject secrets, merge), only in trusted workspaces.
 
 ## Requirements
 
@@ -76,6 +78,8 @@ detects those edits and lets them choose what to keep, so no work is ever silent
 3. Open a project — sync runs automatically.
 
 That's it for public repos. For private repos, SSO-protected orgs, or Enterprise Server, add a token (see below).
+
+> **New here?** Open a project before configuring anything and AI Setup Sync prompts you, with a shortcut to the repository setting.
 
 ## Setting up your repository
 
@@ -165,10 +169,11 @@ Configure via `aiSetupSync.targetFolders` — toggle defaults on or off, or add 
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `aiSetupSync.repository` | *(required)* | GitHub repository URL to sync from, e.g. `https://github.com/your-org/your-repo`. GitHub Enterprise Server is also supported (e.g. `https://github.company.com/your-org/your-repo`). Private repos, SAML SSO orgs, and Enterprise Server repos require a **classic** PAT with the **`repo`** scope — run **Set GitHub Token** from the command palette. |
+| `aiSetupSync.repository` | *(required)* | GitHub repository URL to sync from, e.g. `https://github.com/your-org/your-repo`. GitHub Enterprise Server is also supported (e.g. `https://github.company.com/your-org/your-repo`). Private repos, SAML SSO orgs, and Enterprise Server repos need a token — see [Setting up your repository](#setting-up-your-repository). |
 | `aiSetupSync.branch` | `main` | Branch to sync from. Set to `master` or any other branch if your repo uses a different default. |
 | `aiSetupSync.targetFolders` | *(see above)* | Files and folders to sync from the repo root. Each entry can be toggled on or off — set to `false` to disable a default without removing it. Add entries for any tool that reads config from your project. |
 | `aiSetupSync.pathMappings` | `{}` | Rename paths as files sync from the repo to your project. `"Claude": ".claude"` rewrites `Claude/instructions/style.md` → `.claude/instructions/style.md`. Use `"/"` to map a subfolder to your project root: `"projectA": "/"` syncs `projectA/.github/` as `.github/`. See [Path mappings & multi-project repos](#path-mappings--multi-project-repos) for how overlaps are resolved. |
+| `aiSetupSync.postSyncCommand` | *(empty)* | Shell command to run after a sync changes files — e.g. generate configs from synced templates. Runs **only in trusted workspaces**. See [Post-sync command](#post-sync-command). |
 
 ## Path mappings & multi-project repos
 
@@ -312,6 +317,24 @@ When more than one rule could apply to the same file, the outcome is always pred
 In every case each repo file syncs to exactly one local path — overlapping rules never produce
 duplicate copies.
 
+## Post-sync command
+
+When synced files need a build step — rendering a template, injecting secrets, merging a fragment —
+`aiSetupSync.postSyncCommand` runs a shell command after a sync changes files:
+
+```json
+"aiSetupSync.postSyncCommand": "npm run generate"
+```
+
+- Runs once the whole sync finishes, **only in [trusted workspaces](https://code.visualstudio.com/docs/editor/workspace-trust)** — a cloned repo can't run code just because you opened it.
+- Skips no-op syncs, has a 2-minute timeout, and logs its output to the **AI Setup Sync** channel.
+- If it fails you get an error toast, but the sync itself still succeeds.
+
+Leave it empty to disable. Two things to keep in mind:
+
+- **Don't write into synced paths** — the next sync would treat those files as locally edited.
+- **Its output goes to the log**, exactly like a terminal — so keep secrets in files (`op inject`, `sops`, `envsubst`), not echoed to stdout.
+
 ## Conflict handling
 
 On each sync the extension compares file content against what it last wrote:
@@ -363,7 +386,7 @@ VS Code's own actions.
 | **Show Log** | Open the **AI Setup Sync** output channel. |
 | **Open Settings** | Open the extension's settings. |
 | **Remove Synced Files** | Delete synced files from the project (local edits are preserved). |
-| **Set GitHub Token** | Securely store a GitHub PAT in the OS keychain (required for private repos, SAML SSO org repos, and Enterprise Server repos). Use a **classic** token with the **`repo`** scope; for SAML SSO orgs, also authorize it via *Settings → Personal access tokens → Configure SSO*. Submit empty to clear. |
+| **Set GitHub Token** | Securely store a GitHub PAT in the OS keychain — needed for private, SAML SSO, and Enterprise Server repos. See [Setting up your repository](#setting-up-your-repository) for token requirements. Submit empty to clear. |
 
 Activity is logged to the **AI Setup Sync** output channel (Output panel → dropdown, or **Show
 Log** from the menu).
@@ -436,11 +459,10 @@ Fine-grained personal access tokens don't support the `repo` scope this extensio
 In the OS keychain via VS Code's SecretStorage — never in settings, files, or the repo.
 
 **Can I sync from a private or SSO-protected repo?**
-Yes. Add a classic PAT via **Set GitHub Token**; for SAML SSO orgs, authorize the token for your
-organization on GitHub.
+Yes — add a GitHub token; see [Setting up your repository](#setting-up-your-repository).
 
 **Does it support GitHub Enterprise Server?**
-Yes. Set `aiSetupSync.repository` to your Enterprise Server repo URL (e.g. `https://github.company.com/your-org/your-repo`). Enterprise Server always requires a token — run **Set GitHub Token** and provide a classic PAT with the `repo` scope.
+Yes. Set `aiSetupSync.repository` to your Enterprise Server repo URL (e.g. `https://github.company.com/your-org/your-repo`); it always requires a token — see [Setting up your repository](#setting-up-your-repository).
 
 **Will it work across a whole team?**
 That's the point. Everyone installs the extension and points at the same repo; merge a change and it

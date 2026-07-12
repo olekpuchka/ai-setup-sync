@@ -2,7 +2,7 @@
   "name": "ai-setup-sync",
   "displayName": "AI Setup Sync",
   "description": "Sync AI setup files — Claude Code, GitHub Copilot, Cursor, Google Antigravity, OpenAI Codex, and more — across every project from a shared GitHub repository, automatically.",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "publisher": "olekpuchka",
   "author": {
     "name": "Olek Puchka"
@@ -107,6 +107,13 @@
           },
           "default": {},
           "markdownDescription": "Rename paths as files are synced from the repo to your project. `\"Claude\": \".claude\"` rewrites `Claude/instructions/style.md` → `.claude/instructions/style.md`. More specific (longer) keys always win. Leave empty if your repo already uses the paths AI tools expect. [Learn more](https://github.com/olekpuchka/ai-setup-sync/blob/main/extension/README.md#settings)"
+        },
+        "aiSetupSync.postSyncCommand": {
+          "order": 5,
+          "type": "string",
+          "scope": "resource",
+          "default": "",
+          "markdownDescription": "Shell command to run after a sync changes files — e.g. `npm run generate` to build configs from synced templates. Runs only in [trusted workspaces](https://code.visualstudio.com/docs/editor/workspace-trust); output goes to the **AI Setup Sync** log. Leave empty to disable."
         }
       }
     }

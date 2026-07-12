@@ -4,6 +4,15 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.7.0] — 2026-07-12
+
+### Added
+
+- **`postSyncCommand` setting** — run a shell command after a sync changes files, e.g. to generate configs from synced templates. Runs from the workspace folder, **only in [trusted workspaces](https://code.visualstudio.com/docs/editor/workspace-trust)**, with a 2-minute timeout; output goes to the **AI Setup Sync** log, and a failure never fails the sync. Empty by default.
+- **First-run setup prompt** — opening a project with no repository configured shows a notification pointing to the repository setting, so a fresh install isn't silent. It stops for good once a repository is set.
+
+---
+
 ## [1.6.0] — 2026-07-12
 
 ### Added

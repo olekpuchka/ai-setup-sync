@@ -1,3 +1,4 @@
+import * as cp from "child_process";
 import * as vscode from "vscode";
 import { removeManagedFiles } from "./cleanup";
 import { ConfigError, RateLimitError, RepoRef } from "./github";
@@ -401,6 +402,107 @@ function handleSyncError(err: unknown, interactive: boolean): void {
   }
 }
 
+/** Longest a post-sync command may run before it's killed. */
+const POST_SYNC_COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
+// Generous cap: we only log the output, so a chatty-but-successful generator
+// shouldn't fail with ENOBUFS. Still bounds memory against a real runaway.
+const POST_SYNC_COMMAND_MAX_BUFFER = 10 * 1024 * 1024;
+
+/** Logged once per session so an untrusted workspace doesn't spam the log on every sync. */
+let warnedUntrustedPostSync = false;
+
+/** Turns an exec failure into a cause the user can act on, not a bare/blank message. */
+function describeExecError(err: cp.ExecException, output: string): string {
+  const detail = output ? `\n${output}` : "";
+  // A maxBuffer kill also sets killed + SIGTERM, so it must be checked before the
+  // timeout branch or an over-large output gets misreported as a timeout.
+  if (/maxBuffer/i.test(err.message)) {
+    return `Command output exceeded ${POST_SYNC_COMMAND_MAX_BUFFER / (1024 * 1024)} MB and was killed.${detail}`;
+  }
+  if (err.killed && err.signal === "SIGTERM") {
+    return `Command timed out after ${POST_SYNC_COMMAND_TIMEOUT_MS / 1000}s and was killed.${detail}`;
+  }
+  return output || err.message;
+}
+
+/**
+ * Runs the `postSyncCommand` of every folder whose sync changed files.
+ *
+ * Deliberately runs *after* the whole sync (all folders + progress notification)
+ * finishes, so a slow build step isn't shown as "Syncing files" and one folder's
+ * command doesn't delay another folder's download.
+ *
+ * Security: the setting is workspace-settable (that's its value — per-project
+ * generate steps), so a cloned repo's .vscode/settings.json could carry a
+ * malicious command. Workspace Trust is the gate that stops that — nothing runs
+ * until the user trusts the workspace. (Running only on changed syncs is a
+ * behavior choice, to skip no-op focus syncs, not a security control.)
+ * Failures are logged and toasted but never fail the sync itself.
+ */
+async function runPostSyncCommands(folders: vscode.WorkspaceFolder[]): Promise<void> {
+  const jobs = folders
+    .map((folder) => ({
+      folder,
+      command: (vscode.workspace.getConfiguration(CONFIG, folder.uri).get<string>("postSyncCommand") ?? "").trim(),
+    }))
+    .filter((job) => job.command);
+  if (jobs.length === 0) {
+    return;
+  }
+  if (!vscode.workspace.isTrusted) {
+    if (!warnedUntrustedPostSync) {
+      warnedUntrustedPostSync = true;
+      log(`Post-sync command skipped: workspace is not trusted. Trust this workspace to enable it.`);
+    }
+    return;
+  }
+
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: "AI Setup Sync: Running post-sync command" },
+    async () => {
+      for (const { folder, command } of jobs) {
+        await execPostSyncCommand(folder, command);
+      }
+    }
+  );
+}
+
+async function execPostSyncCommand(folder: vscode.WorkspaceFolder, command: string): Promise<void> {
+  log(`Running post-sync command in ${folder.name}: ${command}`);
+  const started = Date.now();
+  try {
+    const output = await new Promise<string>((resolve, reject) => {
+      cp.exec(
+        command,
+        { cwd: folder.uri.fsPath, timeout: POST_SYNC_COMMAND_TIMEOUT_MS, maxBuffer: POST_SYNC_COMMAND_MAX_BUFFER },
+        (err, stdout, stderr) => {
+          const combined = [stdout, stderr].filter(Boolean).join("\n").trim();
+          if (err) {
+            reject(new Error(describeExecError(err, combined)));
+          } else {
+            resolve(combined);
+          }
+        }
+      );
+    });
+    if (output) {
+      log(output);
+    }
+    log(`Post-sync command finished in ${((Date.now() - started) / 1000).toFixed(1)}s.`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log(`Post-sync command failed: ${msg}`);
+    void vscode.window.showErrorMessage(
+      `AI Setup Sync: post-sync command failed in ${folder.name}.`,
+      "Show Log"
+    ).then((choice) => {
+      if (choice) {
+        showOutput();
+      }
+    });
+  }
+}
+
 async function runSync(
   context: vscode.ExtensionContext,
   interactive: boolean
@@ -451,6 +553,7 @@ async function runSync(
   }
 
   const syncProgress = createSyncProgress();
+  const changedFolders: vscode.WorkspaceFolder[] = [];
 
   const runSyncFolders = async (repoRef: RepoRef) => {
     const summaries: string[] = [];
@@ -512,6 +615,9 @@ async function runSync(
         } else if (!result.noChanges) {
           changed = true;
           summaries.push(toastSummary(result));
+          // Files changed on disk — remember this folder so its post-sync command
+          // runs once the whole sync (and its progress notification) has finished.
+          changedFolders.push(folder);
         }
       } catch (err) {
         handleSyncError(err, interactive);
@@ -575,6 +681,13 @@ async function runSync(
     handleSyncError(err, interactive);
   } finally {
     syncProgress.finish();
+  }
+
+  // The file sync (and its progress notification) is fully done. Run post-sync
+  // commands now, still under the `syncing` guard so a new sync can't overlap.
+  try {
+    await runPostSyncCommands(changedFolders);
+  } finally {
     syncing = false;
   }
 }
@@ -656,6 +769,30 @@ async function removeSyncedFiles(context: vscode.ExtensionContext): Promise<void
   }
 }
 
+/** Session-scoped, so the nudge reshows on the next window while still unconfigured. */
+let welcomeShownThisSession = false;
+
+/**
+ * First-run nudge: a new user has no way to discover they must set a repository —
+ * the status-bar gear is easy to miss and background syncs stay silent. Show one
+ * dismissible prompt per session while unconfigured (the flag resets on window
+ * reload, so a still-unconfigured project nudges again next time), and never once
+ * a repository is set. Skipped in an empty window — nothing to sync into there.
+ */
+async function maybeShowWelcome(context: vscode.ExtensionContext): Promise<void> {
+  if (welcomeShownThisSession || !vscode.workspace.workspaceFolders?.length || readSettings().repository) {
+    return;
+  }
+  welcomeShownThisSession = true;
+  const choice = await vscode.window.showInformationMessage(
+    "AI Setup Sync: add a GitHub repository to start syncing your AI config across projects.",
+    "Open Settings"
+  );
+  if (choice) {
+    await vscode.commands.executeCommand("workbench.action.openSettings", `@ext:${context.extension.id}`);
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const settings = readSettings();
 
@@ -727,6 +864,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void runSync(context, false);
     })
   );
+
+  // First-run: nudge a brand-new, unconfigured user toward settings.
+  void maybeShowWelcome(context);
 
   // Trigger: sync automatically when a workspace opens.
   void runSync(context, false);

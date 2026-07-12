@@ -46,7 +46,7 @@ on save) and a reload of the dev host (**Ctrl+R** / **Cmd+R** in the dev host wi
 ```
 extension/
 ├── src/
-│   ├── extension.ts      — activation, commands, status bar + action menu, sync triggers (startup/focus/settings)
+│   ├── extension.ts      — activation, commands, status bar + action menu, sync triggers (startup/focus/settings), post-sync command
 │   ├── sync.ts           — core sync logic: diff, conflict resolution, write
 │   ├── github.ts         — GitHub API: tree, file fetch, rate-limit/SSO/Enterprise Server handling
 │   ├── token.ts          — SecretStorage helpers for the GitHub PAT

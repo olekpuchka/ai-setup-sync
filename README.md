@@ -24,6 +24,7 @@ Copilot, Cursor, Google Antigravity, OpenAI Codex, and more. No copy-pasting.
 - **Stays out of git** — synced files are added to `.git/info/exclude` so they don't clutter your changes. If you edit one locally, it surfaces in Source Control automatically so you can see the diff.
 - **Works across parallel agent sessions** — synced configs are automatically available in every Claude Code and Codex worktree, so AI tools have your setup no matter which isolated session they run in.
 - **Stays out of your way** — a status-bar item shows sync state and opens a quick action menu; larger syncs show a live progress notification, and routine background syncs stay silent.
+- **Runs your build step** — an optional post-sync command turns synced templates into finished configs, only in trusted workspaces.
 
 ## How it works
 
@@ -88,6 +89,8 @@ flowchart LR
 
 For private repos, SSO-protected orgs, or GitHub Enterprise Server, add a token — see the
 [full setup guide](extension/README.md#setting-up-your-repository).
+
+> **New here?** Open a project before configuring anything and AI Setup Sync prompts you, with a shortcut to the repository setting.
 
 ## Contributing
 
