@@ -35,6 +35,17 @@ function apiBase(repoUrl: string): string {
   }
 }
 
+/** True when two URLs share the same origin (protocol + host + port). */
+function sameOrigin(a: string, b: string): boolean {
+  try {
+    const ua = new URL(a);
+    const ub = new URL(b);
+    return ua.protocol === ub.protocol && ua.host === ub.host;
+  } catch {
+    return false;
+  }
+}
+
 /** Encodes each segment of an `owner/name` slug for use in URLs. */
 function encodeRepoSlug(repo: string): string {
   const slash = repo.indexOf("/");
@@ -77,6 +88,16 @@ export class RateLimitError extends Error {
   }
 }
 
+/** Thrown when a raw file fetch returns a non-2xx HTTP status. Carries the status for callers. */
+export class HttpError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+  }
+}
+
 type RequestResult = {
   status: number;
   body: Buffer;
@@ -110,7 +131,10 @@ function request(url: string, headers: Record<string, string>): Promise<RequestR
   });
 }
 
-/** Retries on transient network errors (not on HTTP-level failures). */
+/** Transient upstream/gateway statuses worth retrying (GitHub intermittently returns these). */
+const RETRYABLE_STATUS = new Set([502, 503, 504]);
+
+/** Retries on transient network errors and transient 5xx gateway responses (not on other HTTP failures). */
 async function requestWithRetry(
   url: string,
   headers: Record<string, string>,
@@ -119,7 +143,14 @@ async function requestWithRetry(
   let lastErr: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      return await request(url, headers);
+      const res = await request(url, headers);
+      // GitHub intermittently 502/503/504s on raw/contents and tree fetches; these are
+      // transient, so back off and retry rather than failing the whole sync.
+      if (RETRYABLE_STATUS.has(res.status) && attempt < maxRetries) {
+        await new Promise<void>((r) => setTimeout(r, Math.min(1000 * 2 ** attempt, 5000)));
+        continue;
+      }
+      return res;
     } catch (err) {
       lastErr = err;
       if (attempt < maxRetries) {
@@ -186,7 +217,12 @@ async function getJson(
   if (status >= 301 && status <= 308) {
     const location = headers["location"];
     if (location && redirectsLeft > 0) {
-      return getJson(String(location), token, etag, redirectsLeft - 1);
+      // Resolve relative Location against the current URL, and drop the token when
+      // the redirect crosses to a different origin — never forward credentials to a
+      // host we didn't authenticate to (SEC: cross-host auth leak on redirect).
+      const nextUrl = new URL(String(location), url).toString();
+      const nextToken = sameOrigin(url, nextUrl) ? token : undefined;
+      return getJson(nextUrl, nextToken, etag, redirectsLeft - 1);
     }
     throw new ConfigError(
       `The repository may have been renamed or moved. Update the repository URL in extension settings.`
@@ -301,7 +337,7 @@ export async function getRawFile(
       ...authHeaders(token),
     });
     if (status < 200 || status >= 300) {
-      throw new Error(`Failed to fetch ${path} (HTTP ${status}).`);
+      throw new HttpError(status, `Failed to fetch ${path} (HTTP ${status}).`);
     }
     return body;
   }
@@ -316,7 +352,7 @@ export async function getRawFile(
   const url = `https://raw.githubusercontent.com/${encodeRepoSlug(repo)}/${encodeURIComponent(ref)}/${encodedPath}`;
   const { status, body } = await requestWithRetry(url, {});
   if (status < 200 || status >= 300) {
-    throw new Error(`Failed to fetch ${path} (HTTP ${status}).`);
+    throw new HttpError(status, `Failed to fetch ${path} (HTTP ${status}).`);
   }
   return body;
 }

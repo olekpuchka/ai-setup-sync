@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { gitBlobSha } from "./blobSha";
-import { getRawFile, getTree, RepoRef, TreeEntry, ConfigError, RateLimitError } from "./github";
+import { getRawFile, getTree, RepoRef, TreeEntry, ConfigError, RateLimitError, HttpError } from "./github";
 import { getState, saveState, SyncState, AckEntry, readAck } from "./state";
 import { computePatterns, computeWorktreePatterns, upsertBlock, stripBlock, MARKER_BEGIN } from "./gitignore";
 import { readRegistry, setWorkspaceFiles } from "./registry";
@@ -9,6 +9,20 @@ import { cacheRemoteContent, clearRemoteContent, remoteDocUri } from "./remoteCo
 
 const DOWNLOAD_CONCURRENCY = 20; // GitHub fetch + local write
 const DISK_CONCURRENCY = 50;     // local read/delete only
+
+/** Thrown when some files failed to download during a sync (others may have succeeded). */
+export class PartialSyncError extends Error {
+  /** Total number of files that failed. */
+  count: number;
+  /** How many failures were transient 5xx gateway errors (likely to succeed on the next sync). */
+  transientCount: number;
+  constructor(count: number, transientCount: number, message: string) {
+    super(message);
+    this.name = "PartialSyncError";
+    this.count = count;
+    this.transientCount = transientCount;
+  }
+}
 
 /** Runs `fn` over `items` with at most `limit` concurrent executions. Throws if any item fails. */
 async function parallelLimit<T>(
@@ -34,7 +48,8 @@ async function parallelLimit<T>(
     const typed = errors.find((e) => e instanceof ConfigError || e instanceof RateLimitError);
     if (typed) throw typed;
     const messages = errors.map((e) => (e instanceof Error ? e.message : String(e))).join("; ");
-    throw new Error(`${errors.length} file(s) failed to sync: ${messages}`);
+    const transientCount = errors.filter((e) => e instanceof HttpError && e.status >= 500).length;
+    throw new PartialSyncError(errors.length, transientCount, `${errors.length} file(s) failed to sync: ${messages}`);
   }
 }
 
@@ -105,7 +120,17 @@ export function localizeStateFiles(
  * mapping a repo path to `../../etc/passwd` (SEC-1b).
  */
 function validateLocalPath(p: string): void {
-  if (!p || p.startsWith("/") || p.split("/").some((seg) => seg === "..")) {
+  // Mirror validateRepoPath: also reject backslashes and drive-letter prefixes so a
+  // pathMappings value like "..\\..\\x" or "C:\\x" can't escape the workspace root on
+  // Windows (where "\" is a separator and "C:" a root, but neither is caught by the
+  // "/"-split ".." check).
+  if (
+    !p ||
+    p.startsWith("/") ||
+    p.includes("\\") ||
+    /^[a-zA-Z]:/.test(p) ||
+    p.split("/").some((seg) => seg === "..")
+  ) {
     throw new Error(`Path mapping produces unsafe local path: "${p}"`);
   }
 }
@@ -646,10 +671,6 @@ export async function syncFolder(
 
   await saveState(context, workspaceFolder, newState);
 
-  if (syncError) {
-    throw syncError;
-  }
-
   if (fileLog.length > 0) {
     log(summarize(workspaceFolder.name, result).replace(/\.$/, ":"));
     fileLog.forEach((line) => log(line));
@@ -675,8 +696,15 @@ export async function syncFolder(
   // to a new local path, old copy left behind) or its key is removed (file excluded
   // but toLocalPath computed the wrong path so the allRemovedPaths loop missed it).
   // Only delete unmodified copies — if the user edited the file, leave it alone.
+  //
+  // Skip this on a partial download failure: a file's new location may have failed to
+  // download, so deleting the old copy now would leave it missing from both places until
+  // the next sync. Defer the cleanup to a fully-successful sync (the exclude/registry
+  // update below still runs, so the files that DID sync are hidden from git either way).
   const prevRegFiles = readRegistry().workspaces[workspaceFolder.uri.fsPath]?.files ?? {};
-  const orphanedLocalPaths = Object.keys(prevRegFiles).filter((lp) => !(lp in localFiles));
+  const orphanedLocalPaths = syncError
+    ? []
+    : Object.keys(prevRegFiles).filter((lp) => !(lp in localFiles));
   if (orphanedLocalPaths.length > 0) {
     const orphanDeletedPaths: string[] = [];
     await parallelLimit(orphanedLocalPaths, DISK_CONCURRENCY, async (localPath) => {
@@ -706,7 +734,14 @@ export async function syncFolder(
     // Locally-modified files are removed from the exclude block so they surface in git
     // status/diff. Everything else stays hidden to avoid polluting the project's git state.
     const excludePaths = managedPaths.filter((lp) => !locallyModifiedLocalPaths.has(lp));
-    setWorkspaceFiles(workspaceFolder.uri.fsPath, localFiles);
+    // On a partial failure, don't rewrite the registry: the on-disk state is incomplete
+    // (a moved/new file may have failed to download), and overwriting would drop the
+    // orphan-tracking record for old-mapping files so they'd never be cleaned up. Defer
+    // the registry rewrite (like the orphan cleanup above) to the next fully-clean sync.
+    // The git exclude is still refreshed so the files that DID sync are hidden from git.
+    if (!syncError) {
+      setWorkspaceFiles(workspaceFolder.uri.fsPath, localFiles);
+    }
     await applyGitExclude(workspaceFolder, excludePaths.length > 0 ? [...excludePaths, ".worktreeinclude"] : excludePaths);
     await applyWorktreeInclude(workspaceFolder, managedPaths, targetFolders, pathMappings);
   } catch (err) {
@@ -715,6 +750,13 @@ export async function syncFolder(
 
   result.locallyModifiedPaths = [...locallyModifiedLocalPaths];
   result.noChanges = result.added === 0 && result.updated === 0 && result.deleted === 0 && result.keptDeleted === 0;
+
+  // Surface a download failure only AFTER the git exclude and registry have been updated
+  // for the files that DID succeed. Throwing earlier left successfully-written files out of
+  // .git/info/exclude, so they showed up as untracked changes until the next clean sync.
+  if (syncError) {
+    throw syncError;
+  }
   return result;
 }
 

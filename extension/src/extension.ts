@@ -5,10 +5,10 @@ import { ConfigError, RateLimitError, RepoRef } from "./github";
 import { initOutput, log, showOutput } from "./output";
 import { readRegistry, setWorkspaceFiles } from "./registry";
 import { getState, saveState } from "./state";
-import { localizeStateFiles, toastSummary, syncFolder, applyGitExclude } from "./sync";
+import { localizeStateFiles, toastSummary, syncFolder, applyGitExclude, PartialSyncError } from "./sync";
 import { gitBlobSha } from "./blobSha";
 import { REMOTE_SCHEME, remoteContentProvider } from "./remoteContent";
-import { deleteToken, getToken, setToken } from "./token";
+import { deleteToken, getToken, getTokenHost, setToken } from "./token";
 
 const CONFIG = "aiSetupSync";
 
@@ -241,6 +241,45 @@ function parseRepo(raw: string): string | null {
   return m ? m[1] : null;
 }
 
+/** Hostname of a URL, or undefined if it doesn't parse. */
+function hostOf(url: string): string | undefined {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Guards against a workspace `.vscode/settings.json` silently redirecting the
+ * repository URL to an attacker-controlled host and exfiltrating the stored
+ * GitHub token (which is a machine-global secret, shared across every workspace).
+ *
+ * The token is bound to the GitHub host it was configured for (see token.ts) and
+ * is only ever sent to that host — so a workspace-scoped repository pointing
+ * elsewhere gets no credentials, even when the repo is configured only per-project.
+ *
+ * Legacy tokens saved before host-binding have no bound host: for those we fall
+ * back to the *user*-level repository host (a scope a cloned repo cannot write) as
+ * the trusted baseline, and — only when the user has no user-level repository at
+ * all — preserve prior behavior so purely per-workspace setups keep working until
+ * the token is next saved (which binds it).
+ */
+function tokenAllowedForHost(context: vscode.ExtensionContext, effectiveRepo: string): boolean {
+  const effHost = hostOf(effectiveRepo);
+  if (!effHost) {
+    return false; // unparseable repository URL — nothing to authorize
+  }
+  const boundHost = getTokenHost(context);
+  if (boundHost) {
+    return effHost === boundHost;
+  }
+  // Legacy/unbound token — use the user-level repository host as the baseline.
+  const inspected = vscode.workspace.getConfiguration(CONFIG).inspect<string>("repository");
+  const userHost = hostOf((inspected?.globalValue ?? "").trim());
+  return userHost ? effHost === userHost : true;
+}
+
 // ---------------------------------------------------------------------------
 // File watcher — detects edits to managed files and immediately removes them
 // from .git/info/exclude so they surface in git status / diff.
@@ -380,6 +419,27 @@ function handleSyncError(err: unknown, interactive: boolean): void {
     return;
   }
 
+  if (err instanceof PartialSyncError) {
+    // Some files failed to download while others may have succeeded. The full per-file
+    // detail is already in the log (above); keep the toast short and reassuring, since
+    // the next sync retries automatically. Transient 5xx get an explicitly calmer message.
+    const n = err.count;
+    const s = n === 1 ? "" : "s";
+    const allTransient = n > 0 && err.transientCount === n;
+    setStatus("error", allTransient ? "GitHub temporarily unavailable" : `${n} file${s} failed to sync`);
+    if (interactive) {
+      const text = allTransient
+        ? `AI Setup Sync: GitHub returned a temporary error for ${n} file${s} — they'll sync automatically on the next attempt.`
+        : `AI Setup Sync: ${n} file${s} couldn't be synced. They'll retry on the next sync — see the log for details.`;
+      void vscode.window.showErrorMessage(text, "Show Log").then((choice) => {
+        if (choice) {
+          showOutput();
+        }
+      });
+    }
+    return;
+  }
+
   setStatus("error", msg);
   if (interactive) {
     if (err instanceof ConfigError) {
@@ -397,7 +457,7 @@ function handleSyncError(err: unknown, interactive: boolean): void {
         });
       }
     } else {
-      void vscode.window.showErrorMessage(`AI Setup Sync: sync failed: ${msg}`);
+      void vscode.window.showErrorMessage(`AI Setup Sync: Sync failed: ${msg}`);
     }
   }
 }
@@ -493,7 +553,7 @@ async function execPostSyncCommand(folder: vscode.WorkspaceFolder, command: stri
     const msg = err instanceof Error ? err.message : String(err);
     log(`Post-sync command failed: ${msg}`);
     void vscode.window.showErrorMessage(
-      `AI Setup Sync: post-sync command failed in ${folder.name}.`,
+      `AI Setup Sync: Post-sync command failed in ${folder.name}.`,
       "Show Log"
     ).then((choice) => {
       if (choice) {
@@ -672,7 +732,18 @@ async function runSync(
   setStatus("syncing");
   try {
     const token = await getToken(context);
-    const repoRef: RepoRef = { repo: parseRepo(settings.repository) ?? "", url: settings.repository, ref: settings.branch, token };
+    let effectiveToken = token;
+    if (token && !tokenAllowedForHost(context, settings.repository)) {
+      // The repository points at a host the token isn't bound to — withhold it so a
+      // workspace-scoped setting can't redirect the token to an unintended host.
+      effectiveToken = undefined;
+      log(
+        `Warning: GitHub token withheld — the repository host "${hostOf(settings.repository) ?? settings.repository}" ` +
+          `is not the host your token was saved for. If this repository is genuinely yours, re-run ` +
+          `"AI Setup Sync: Set GitHub Token" while it's configured to authorize the token for this host.`
+      );
+    }
+    const repoRef: RepoRef = { repo: parseRepo(settings.repository) ?? "", url: settings.repository, ref: settings.branch, token: effectiveToken };
     await runSyncFolders(repoRef);
   } catch (err) {
     // Per-folder failures are handled inside runSyncFolders; this catches the rest
@@ -785,7 +856,7 @@ async function maybeShowWelcome(context: vscode.ExtensionContext): Promise<void>
   }
   welcomeShownThisSession = true;
   const choice = await vscode.window.showInformationMessage(
-    "AI Setup Sync: add a GitHub repository to start syncing your AI config across projects.",
+    "AI Setup Sync: Add a GitHub repository to start syncing your AI config across projects.",
     "Open Settings"
   );
   if (choice) {
@@ -858,8 +929,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           return;
         }
       }
-      await setToken(context, input);
-      log("GitHub token saved to secure storage.");
+      // Bind the token to the host it's being configured for, so it's never sent
+      // elsewhere (e.g. a workspace-overridden repository URL).
+      const tokenHost = hostOf(readSettings().repository);
+      await setToken(context, input, tokenHost);
+      log(`GitHub token saved to secure storage${tokenHost ? ` (authorized for ${tokenHost})` : ""}.`);
       void vscode.window.showInformationMessage("AI Setup Sync: GitHub token saved.");
       void runSync(context, false);
     })

@@ -1,3 +1,6 @@
 node_modules/
 dist/
 *.vsix
+# Generated at build time from the root CHANGELOG.md (see the "package" script);
+# the root file is canonical. Not tracked here to avoid a committed copy drifting.
+CHANGELOG.md

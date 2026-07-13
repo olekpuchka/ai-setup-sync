@@ -37,15 +37,12 @@ Treat your AI setup like shared code: change it in one place, and it propagates 
 
 ## How it works
 
-1. **Maintain one repository.** Put your shared AI config files in a GitHub repo — `.claude/`,
-   `CLAUDE.md`, `.github/copilot-instructions.md`, `.cursor/rules/`, and so on.
-2. **Point every project at it.** Each developer installs the extension and sets one setting:
-   the repository URL.
-3. **Files sync automatically.** On project open and whenever you return focus to the window, the
-   extension pulls the latest files into each project.
+Put your shared AI config files in one GitHub repo (`.claude/`, `CLAUDE.md`,
+`.github/copilot-instructions.md`, `.cursor/rules/`, …). Point the extension at that repo, and it
+pulls the latest files into each project on open and window focus.
 
-Sync flows one way: **repo → projects**. Developers can still edit files locally — the extension
-detects those edits and lets them choose what to keep, so no work is ever silently overwritten.
+Sync flows one way: **repo → projects**. You can still edit files locally — the extension detects
+those edits and lets you choose what to keep, so no work is ever silently overwritten.
 
 > **Before you start** — you'll need a GitHub repository containing your shared AI setup files.
 > See [Setting up your repository](#setting-up-your-repository).

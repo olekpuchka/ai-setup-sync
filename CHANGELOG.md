@@ -4,6 +4,21 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.7.1] — 2026-07-13
+
+### Security
+
+- **Token stays on its own host** — your GitHub token is only sent to the host it was saved for, so a project can't redirect the repository URL and leak it. Repos on the same host work as before.
+- **Token dropped on cross-host redirects** — it's never forwarded to a different host.
+- **Safer path mappings** — mapping destinations with backslashes or drive letters (e.g. `C:\…`) are rejected.
+
+### Fixed
+
+- **Synced files stay hidden from git after a failed download** — if one file failed mid-sync, the files that did sync no longer show up as untracked changes.
+- **Temporary GitHub errors are retried** — `502`/`503`/`504` responses retry automatically, so a brief GitHub hiccup no longer fails the sync. If one still fails, the notification is short and clear with a **Show Log** button.
+
+---
+
 ## [1.7.0] — 2026-07-12
 
 ### Added
