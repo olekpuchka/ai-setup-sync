@@ -4,6 +4,16 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.7.2] — 2026-07-13
+
+### Security
+
+- **Sync never writes into `.git/`** — path mappings and target folders can't place a file inside the git directory. `.github`, `.gitignore`, and `.gitattributes` are unaffected.
+- **Path mappings reject control characters** — a destination with a newline or other control character is rejected.
+- **Tokens bind to their host sooner** — a token saved before a repository is configured now binds on the next sync. Existing setups are unchanged.
+
+---
+
 ## [1.7.1] — 2026-07-13
 
 ### Security

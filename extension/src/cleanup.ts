@@ -58,9 +58,14 @@ export function removeManagedFiles(
 
 /** Removes now-empty directories, walking up toward (but not removing) the workspace root. */
 function pruneEmptyDirs(workspaceFsPath: string, dirs: Set<string>): void {
+  // Resolve the root and match with a trailing separator, exactly as removeManagedFiles does.
+  // The `dirs` entries come from path.resolve(...), so comparing against the raw arg could
+  // mismatch on a drive-letter casing/normalization difference (Windows) and stop the walk
+  // early; anchoring to the resolved root keeps the walk correct and inside the workspace.
+  const workspaceResolved = path.resolve(workspaceFsPath);
   const ordered = [...dirs].sort((a, b) => b.length - a.length); // deepest first
   for (let dir of ordered) {
-    while (dir.startsWith(workspaceFsPath) && dir !== workspaceFsPath) {
+    while (dir.startsWith(workspaceResolved + path.sep)) {
       try {
         if (fs.readdirSync(dir).length > 0) {
           break;

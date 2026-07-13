@@ -115,23 +115,62 @@ export function localizeStateFiles(
 }
 
 /**
- * Rejects local paths that could escape the workspace root after pathMappings
- * translation. Protects against a malicious workspace `.vscode/settings.json`
- * mapping a repo path to `../../etc/passwd` (SEC-1b).
+ * The single "is this a safe workspace-relative path" invariant, shared by
+ * validateRepoPath and validateLocalPath so both enforce exactly the same rules.
+ * Returns a short reason when `p` is unsafe, or undefined when it's fine.
+ *
+ * A path is safe only if it is relative, uses `/` separators, has no control
+ * characters, no traversal/degenerate segment, and never names the git directory.
  */
-function validateLocalPath(p: string): void {
-  // Mirror validateRepoPath: also reject backslashes and drive-letter prefixes so a
-  // pathMappings value like "..\\..\\x" or "C:\\x" can't escape the workspace root on
-  // Windows (where "\" is a separator and "C:" a root, but neither is caught by the
-  // "/"-split ".." check).
+function unsafePathReason(p: string): string | undefined {
+  // Whole-string checks first, so `!p` short-circuits before any `.split` (a null/undefined
+  // `p` returns a reason rather than throwing a TypeError).
   if (
     !p ||
     p.startsWith("/") ||
+    // Reject backslashes and drive-letter prefixes so "..\\..\\x" or "C:\\x" can't escape the
+    // workspace root on Windows (where "\" is a separator and "C:" a root, neither caught by
+    // the "/"-split segment check).
     p.includes("\\") ||
     /^[a-zA-Z]:/.test(p) ||
-    p.split("/").some((seg) => seg === "..")
+    // Control chars (esp. newline) matter because a path is emitted verbatim into
+    // .git/info/exclude and .worktreeinclude — a value like "docs\n!*.env" would otherwise
+    // inject extra ignore rules that hide files from git status.
+    /[\x00-\x1f]/.test(p)
   ) {
-    throw new Error(`Path mapping produces unsafe local path: "${p}"`);
+    return "traversal or degenerate segment";
+  }
+  const segments = p.split("/");
+  // Traversal check. Windows strips trailing spaces from each component, so ".. " / ". "
+  // resolve to ".." / "." on disk — strip trailing spaces before comparing so they can't slip
+  // past. Do NOT strip trailing dots here: dots make a name longer, not a parent ref ("..."
+  // is an invalid empty name on Windows, a legal literal file on Linux/macOS — never
+  // traversal), so stripping them would wrongly reject legal all-dot filenames. An empty
+  // result means the segment was empty ("//") or only spaces/"."/"..".
+  if (segments.some((seg) => { const t = seg.replace(/ +$/, ""); return t === "" || t === "." || t === ".."; })) {
+    return "traversal or degenerate segment";
+  }
+  // Never touch the git internals directory, at any depth. targetFolders/pathMappings are
+  // workspace-settable (window scope), so a malicious `.vscode/settings.json` could otherwise
+  // map a synced file onto `.git/hooks/pre-commit` (or a nested repo's) and get code execution
+  // on the next commit. Strip trailing dots AND spaces (full Windows normalization) so ".git."
+  // and ".git " resolve here too. Case-insensitive per Git's macOS/Windows behavior.
+  if (segments.some((seg) => seg.replace(/[ .]+$/, "").toLowerCase() === ".git")) {
+    return "targets the git directory";
+  }
+  return undefined;
+}
+
+/**
+ * Rejects local paths that could escape the workspace root after pathMappings
+ * translation, or that would clobber git internals. Protects against a malicious
+ * workspace `.vscode/settings.json` mapping a repo path to `../../etc/passwd` or
+ * `.git/hooks/pre-commit` (SEC-1b).
+ */
+function validateLocalPath(p: string): void {
+  const reason = unsafePathReason(p);
+  if (reason) {
+    throw new Error(`Path mapping produces unsafe local path (${reason}): "${p}"`);
   }
 }
 
@@ -148,13 +187,14 @@ function isSyncable(path: string, targetFolders: string[], mappings: Record<stri
 }
 
 /**
- * Rejects paths that could escape the workspace root via traversal or absolute
- * references. Paths from the GitHub tree API should never need these, so treating
- * them as errors is the right policy (SEC-1).
+ * Rejects repo paths that could escape the workspace root or clobber git internals.
+ * Paths from the GitHub tree API should never trip these (Git itself forbids `.git`
+ * components and control chars), so treating them as errors is the right policy (SEC-1).
  */
 function validateRepoPath(p: string): void {
-  if (!p || p.startsWith("/") || p.includes("\\") || p.split("/").some((seg) => seg === ".." || seg === ".")) {
-    throw new Error(`Unsafe path rejected from repository: "${p}"`);
+  const reason = unsafePathReason(p);
+  if (reason) {
+    throw new Error(`Unsafe path rejected from repository (${reason}): "${p}"`);
   }
 }
 

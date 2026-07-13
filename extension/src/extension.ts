@@ -732,6 +732,19 @@ async function runSync(
   setStatus("syncing");
   try {
     const token = await getToken(context);
+    // Lazily bind an unbound token (one saved before a repository was configured, or
+    // before host-binding existed) to the *user-level* repository host as soon as one is
+    // known. Binding only to the global host — never the effective/workspace host — means
+    // a workspace-scoped repository URL can't retroactively claim the token, while the
+    // common "token saved, repo set globally" case stops lingering in the unbound state.
+    if (token && !getTokenHost(context)) {
+      const globalRepo = vscode.workspace.getConfiguration(CONFIG).inspect<string>("repository")?.globalValue ?? "";
+      const globalHost = hostOf(globalRepo.trim());
+      if (globalHost) {
+        await setToken(context, token, globalHost);
+        log(`GitHub token bound to ${globalHost} (from your user-level repository setting).`);
+      }
+    }
     let effectiveToken = token;
     if (token && !tokenAllowedForHost(context, settings.repository)) {
       // The repository points at a host the token isn't bound to — withhold it so a

@@ -326,6 +326,7 @@ When synced files need a build step — rendering a template, injecting secrets,
 - Runs once the whole sync finishes, **only in [trusted workspaces](https://code.visualstudio.com/docs/editor/workspace-trust)** — a cloned repo can't run code just because you opened it.
 - Skips no-op syncs, has a 2-minute timeout, and logs its output to the **AI Setup Sync** channel.
 - If it fails you get an error toast, but the sync itself still succeeds.
+- Runs in your platform's shell — `cmd.exe` on Windows, `sh` on macOS/Linux — so prefer cross-platform commands like `npm run generate` over shell-specific syntax.
 
 Leave it empty to disable. Two things to keep in mind:
 
