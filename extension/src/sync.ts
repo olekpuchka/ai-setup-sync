@@ -7,8 +7,11 @@ import { readRegistry, setWorkspaceFiles } from "./registry";
 import { log } from "./output";
 import { cacheRemoteContent, clearRemoteContent, remoteDocUri } from "./remoteContent";
 
-const DOWNLOAD_CONCURRENCY = 20; // GitHub fetch + local write
-const DISK_CONCURRENCY = 50;     // local read/delete only
+// GitHub throttles *concurrent* requests per user with a secondary (abuse) rate
+// limit — hundreds of files at high concurrency reliably trip it (HTTP 403). Keep
+// this modest; requestWithRetry also backs off and retries 403/429 with Retry-After.
+const DOWNLOAD_CONCURRENCY = 8; // GitHub fetch + local write
+const DISK_CONCURRENCY = 50;    // local read/delete only
 
 /** Thrown when some files failed to download during a sync (others may have succeeded). */
 export class PartialSyncError extends Error {
@@ -32,13 +35,20 @@ async function parallelLimit<T>(
 ): Promise<void> {
   const queue = items.slice();
   const errors: unknown[] = [];
+  // A rate limit (or auth failure) won't clear within this run — stop pulling new
+  // items once one occurs rather than churning through every remaining file. Workers
+  // already mid-request finish; no new requests are started.
+  let aborted = false;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (queue.length > 0) {
+    while (queue.length > 0 && !aborted) {
       const item = queue.shift()!;
       try {
         await fn(item);
       } catch (err) {
         errors.push(err);
+        if (err instanceof RateLimitError || err instanceof ConfigError) {
+          aborted = true;
+        }
       }
     }
   });
@@ -700,12 +710,14 @@ export async function syncFolder(
     await pruneEmptyParentDirs(deletedLocalPaths, workspaceFolder.uri, fileLog);
   }
 
-  // If the user dismissed any conflict prompt (Escape/X) without making a
-  // choice, don't cache the tree ETag — the next sync must re-fetch the tree
-  // and re-offer the dialog.
+  // Don't cache the tree ETag when the sync didn't fully complete, or the next
+  // sync gets a 304 and takes the short-circuit path — which only revisits files
+  // already in state — so files that failed to download are never retried:
+  //  - a dismissed conflict prompt (Escape/X) must re-fetch and re-offer the dialog;
+  //  - a download failure (e.g. rate-limit 403s) must re-fetch and retry the misses.
   // Note: acknowledged entries are preserved inline during the main loop above
   // (the "acknowledged" classification) — no separate carry-over step needed.
-  if (wasDismissed || deleteWasDismissed) {
+  if (wasDismissed || deleteWasDismissed || syncError) {
     newState.treeEtag = undefined;
   }
 

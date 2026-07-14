@@ -134,7 +134,28 @@ function request(url: string, headers: Record<string, string>): Promise<RequestR
 /** Transient upstream/gateway statuses worth retrying (GitHub intermittently returns these). */
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
 
-/** Retries on transient network errors and transient 5xx gateway responses (not on other HTTP failures). */
+/** `Retry-After` seconds → milliseconds, or null if the header is absent/invalid. */
+function parseRetryAfterMs(headers: Record<string, string | string[] | undefined>): number | null {
+  const seconds = Number(headers["retry-after"]);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null;
+}
+
+/**
+ * How long to wait before retrying a 403/429, or null to not retry. Only a secondary
+ * (abuse) rate limit — which GitHub signals with `Retry-After` — is retried, since it
+ * clears quickly. Primary-quota exhaustion and hard 403s (SSO/permission) have no
+ * `Retry-After` and can't clear in a useful window, so they fail fast instead. The
+ * wait is capped so a single retry can't stall the sync for too long.
+ */
+function rateLimitRetryDelayMs(res: RequestResult): number | null {
+  if (res.status !== 403 && res.status !== 429) {
+    return null;
+  }
+  const ms = parseRetryAfterMs(res.headers);
+  return ms === null ? null : Math.min(ms, 60000);
+}
+
+/** Retries transient network errors, transient 5xx gateway responses, and secondary rate-limit 403/429s. */
 async function requestWithRetry(
   url: string,
   headers: Record<string, string>,
@@ -148,6 +169,11 @@ async function requestWithRetry(
       // transient, so back off and retry rather than failing the whole sync.
       if (RETRYABLE_STATUS.has(res.status) && attempt < maxRetries) {
         await new Promise<void>((r) => setTimeout(r, Math.min(1000 * 2 ** attempt, 5000)));
+        continue;
+      }
+      const rateLimitDelay = rateLimitRetryDelayMs(res);
+      if (rateLimitDelay !== null && attempt < maxRetries) {
+        await new Promise<void>((r) => setTimeout(r, Math.max(rateLimitDelay, 1000 * 2 ** attempt)));
         continue;
       }
       return res;
@@ -176,6 +202,15 @@ function rateLimitError(
       undefined,
       true,
       ssoUrl
+    );
+  }
+  // Secondary (abuse) rate limit: GitHub sends Retry-After, meaning "too many requests
+  // at once". This is about burst concurrency, not quota — so don't suggest adding a token.
+  const retryAfterMs = parseRetryAfterMs(headers);
+  if (retryAfterMs !== null) {
+    return new RateLimitError(
+      `GitHub is throttling requests (too many at once). Try syncing again in a moment.`,
+      Date.now() + retryAfterMs
     );
   }
   const reset = Number(headers["x-ratelimit-reset"]);
@@ -328,29 +363,32 @@ export async function getRawFile(
   path: string
 ): Promise<Buffer> {
   const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+  let url: string;
+  let requestHeaders: Record<string, string>;
   if (token) {
     // Authenticated path (works for private repos and GitHub Enterprise Server): contents API with raw accept.
-    const url = `${apiBase(repoUrl)}/repos/${encodeRepoSlug(repo)}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`;
-    const { status, body } = await requestWithRetry(url, {
+    url = `${apiBase(repoUrl)}/repos/${encodeRepoSlug(repo)}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`;
+    requestHeaders = {
       Accept: "application/vnd.github.raw",
       "X-GitHub-Api-Version": "2022-11-28",
       ...authHeaders(token),
-    });
-    if (status < 200 || status >= 300) {
-      throw new HttpError(status, `Failed to fetch ${path} (HTTP ${status}).`);
+    };
+  } else {
+    // Unauthenticated raw access is only available on github.com.
+    const { hostname } = new URL(repoUrl);
+    if (hostname !== "github.com") {
+      throw new ConfigError(
+        `A GitHub token is required to sync from GitHub Enterprise Server (${hostname}). Set a token with the \`repo\` scope.`,
+        true
+      );
     }
-    return body;
+    url = `https://raw.githubusercontent.com/${encodeRepoSlug(repo)}/${encodeURIComponent(ref)}/${encodedPath}`;
+    requestHeaders = {};
   }
-  // Unauthenticated raw access is only available on github.com.
-  const { hostname } = new URL(repoUrl);
-  if (hostname !== "github.com") {
-    throw new ConfigError(
-      `A GitHub token is required to sync from GitHub Enterprise Server (${hostname}). Set a token with the \`repo\` scope.`,
-      true
-    );
+  const { status, body, headers } = await requestWithRetry(url, requestHeaders);
+  if (status === 403 || status === 429) {
+    throw rateLimitError(headers);
   }
-  const url = `https://raw.githubusercontent.com/${encodeRepoSlug(repo)}/${encodeURIComponent(ref)}/${encodedPath}`;
-  const { status, body } = await requestWithRetry(url, {});
   if (status < 200 || status >= 300) {
     throw new HttpError(status, `Failed to fetch ${path} (HTTP ${status}).`);
   }

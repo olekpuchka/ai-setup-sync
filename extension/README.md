@@ -166,8 +166,8 @@ Configure via `aiSetupSync.targetFolders` — toggle defaults on or off, or add 
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `aiSetupSync.repository` | *(required)* | GitHub repository URL to sync from, e.g. `https://github.com/your-org/your-repo`. GitHub Enterprise Server is also supported (e.g. `https://github.company.com/your-org/your-repo`). Private repos, SAML SSO orgs, and Enterprise Server repos need a token — see [Setting up your repository](#setting-up-your-repository). |
-| `aiSetupSync.branch` | `main` | Branch to sync from. Set to `master` or any other branch if your repo uses a different default. |
+| `aiSetupSync.repository` | *(required)* | GitHub repository URL to sync from, e.g. `https://github.com/your-org/your-repo`. GitHub Enterprise Server is also supported (e.g. `https://github.company.com/your-org/your-repo`). Private repos, SAML SSO orgs, and Enterprise Server repos need a token — see [Setting up your repository](#setting-up-your-repository). Set in workspace settings, it's only used in [trusted workspaces](https://code.visualstudio.com/docs/editor/workspace-trust); set it in **user** settings to sync regardless of trust. |
+| `aiSetupSync.branch` | `main` | Branch to sync from. Set to `master` or any other branch if your repo uses a different default. Like `repository`, a workspace-level value is only honored in trusted workspaces. |
 | `aiSetupSync.targetFolders` | *(see above)* | Files and folders to sync from the repo root. Each entry can be toggled on or off — set to `false` to disable a default without removing it. Add entries for any tool that reads config from your project. |
 | `aiSetupSync.pathMappings` | `{}` | Rename paths as files sync from the repo to your project. `"Claude": ".claude"` rewrites `Claude/instructions/style.md` → `.claude/instructions/style.md`. Use `"/"` to map a subfolder to your project root: `"projectA": "/"` syncs `projectA/.github/` as `.github/`. See [Path mappings & multi-project repos](#path-mappings--multi-project-repos) for how overlaps are resolved. |
 | `aiSetupSync.postSyncCommand` | *(empty)* | Shell command to run after a sync changes files — e.g. generate configs from synced templates. Runs **only in trusted workspaces**. See [Post-sync command](#post-sync-command). |
@@ -324,8 +324,10 @@ When synced files need a build step — rendering a template, injecting secrets,
 ```
 
 - Runs once the whole sync finishes, **only in [trusted workspaces](https://code.visualstudio.com/docs/editor/workspace-trust)** — a cloned repo can't run code just because you opened it.
+- **Asks before running a changed command** — if it differs from the one you last approved (say a `git pull` swapped it), you're shown the command in a dismissible notification and it runs only when you click **Run**. An unchanged command runs without prompting.
 - Skips no-op syncs, has a 2-minute timeout, and logs its output to the **AI Setup Sync** channel.
-- If it fails you get an error toast, but the sync itself still succeeds.
+- You get a brief notification when it finishes, or an error toast (**Show Log** / **Open Settings**) if it fails — the sync itself still succeeds either way. A failure also shows a status-bar warning that stays until the command succeeds; run **Sync Now** to retry it.
+- **Run it on demand** — **Run Post Sync Command** (status-bar menu or Command Palette) runs it without waiting for a sync.
 - Runs in your platform's shell — `cmd.exe` on Windows, `sh` on macOS/Linux — so prefer cross-platform commands like `npm run generate` over shell-specific syntax.
 
 Leave it empty to disable. Two things to keep in mind:
@@ -373,14 +375,13 @@ stay silent.
 
 ## Commands
 
-Every action is available from the status-bar **action menu**. **Sync Now**, **Remove Synced
-Files**, and **Set GitHub Token** are also in the command palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
-under the **AI Setup Sync** category; **Show Log** and **Open Settings** are menu-only shortcuts to
-VS Code's own actions.
+Every action is available from the status-bar **action menu** and from the command palette
+(`Ctrl+Shift+P` / `Cmd+Shift+P`) under the **AI Setup Sync** category.
 
 | Action | Description |
 | --- | --- |
 | **Sync Now** | Sync immediately. |
+| **Run Post Sync Command** | Run the configured [post-sync command](#post-sync-command) without waiting for a sync. Shown only when one is set. |
 | **Show Log** | Open the **AI Setup Sync** output channel. |
 | **Open Settings** | Open the extension's settings. |
 | **Remove Synced Files** | Delete synced files from the project (local edits are preserved). |

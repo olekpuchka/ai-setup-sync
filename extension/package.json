@@ -2,7 +2,7 @@
   "name": "ai-setup-sync",
   "displayName": "AI Setup Sync",
   "description": "Sync AI setup files — Claude Code, GitHub Copilot, Cursor, Google Antigravity, OpenAI Codex, and more — across every project from a shared GitHub repository, automatically.",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "publisher": "olekpuchka",
   "author": {
     "name": "Olek Puchka"
@@ -44,11 +44,37 @@
   "activationEvents": [
     "onStartupFinished"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Sync source and the post-sync command are only honored in trusted workspaces, so a cloned repository cannot repoint the sync or execute a command from its workspace settings until you trust it.",
+      "restrictedConfigurations": [
+        "aiSetupSync.repository",
+        "aiSetupSync.branch",
+        "aiSetupSync.postSyncCommand"
+      ]
+    }
+  },
   "contributes": {
     "commands": [
       {
         "command": "aiSetupSync.syncNow",
         "title": "Sync Now",
+        "category": "AI Setup Sync"
+      },
+      {
+        "command": "aiSetupSync.runPostSyncCommand",
+        "title": "Run Post Sync Command",
+        "category": "AI Setup Sync"
+      },
+      {
+        "command": "aiSetupSync.showLog",
+        "title": "Show Log",
+        "category": "AI Setup Sync"
+      },
+      {
+        "command": "aiSetupSync.openSettings",
+        "title": "Open Settings",
         "category": "AI Setup Sync"
       },
       {

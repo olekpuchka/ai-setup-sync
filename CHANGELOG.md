@@ -4,6 +4,27 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.7.3] — 2026-07-14
+
+### Security
+
+- **Sync source restricted in untrusted workspaces** — `repository` and `branch` set in workspace settings are ignored until you trust the workspace, so a cloned repo can't repoint your sync. User (global) settings are unaffected.
+- **Post-sync command trust-restricted** — `postSyncCommand` is now declared restricted, so VS Code ignores a workspace's command until you trust it.
+- **Changed commands ask before running** — if `postSyncCommand` differs from the one you last approved (e.g. a `git pull` swapped it), you're shown it in a dismissible notification and it runs only when you click **Run**. An unchanged command never prompts.
+
+### Changed
+
+- **A newly added or edited post-sync command now runs on the next sync** even when no files changed (once approved), instead of staying silent until the next real change.
+- **New "Run Post Sync Command" action** — run the configured command on demand from the status-bar menu or Command Palette, without waiting for a sync.
+- **Clearer post-sync command feedback** — a brief notification when it finishes, an error toast (with **Show Log** and **Open Settings**) if it fails, plus a status-bar warning that persists across reloads until it succeeds. Run **Sync Now** to retry a failed command.
+
+### Fixed
+
+- **Large repos no longer fail to sync** — pulling many files at once could trip GitHub's rate limit and fail with HTTP 403. Syncs now use gentler concurrency, wait and retry when GitHub asks, and show a clear rate-limit message instead of a cryptic per-file error.
+- **A failed sync no longer gets stuck showing "synced" with no files** — after a failure the next sync re-fetches and retries the files that didn't download, instead of assuming nothing changed.
+
+---
+
 ## [1.7.2] — 2026-07-13
 
 ### Security

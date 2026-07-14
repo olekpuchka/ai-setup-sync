@@ -16,6 +16,16 @@ const CONFIG = "aiSetupSync";
 
 let statusBar: vscode.StatusBarItem | undefined;
 let lastSyncSuccessAt: number | undefined;
+// Last state passed to setStatus, so the post-sync-failure overlay can re-render without losing it.
+let lastStatusState: "idle" | "syncing" | "error" | "unconfigured" = "idle";
+let lastStatusDetail: string | undefined;
+// Folder keys whose last post-sync command failed. Shown persistently in the status bar
+// (a fast-sync toast can be missed), retried by a manual Sync Now, and cleared when the
+// command next succeeds. Persisted in workspaceState so it survives a window reload.
+const postSyncFailedFolders = new Set<string>();
+const POST_SYNC_FAILED_KEY = "postSyncCommand.failed";
+// Set in activate() so status helpers can persist the failure set without threading context.
+let extensionContext: vscode.ExtensionContext | undefined;
 
 function relativeTime(ms: number): string {
   const secs = Math.round((Date.now() - ms) / 1000);
@@ -35,6 +45,16 @@ function setStatus(
   detail?: string
 ): void {
   if (!statusBar) {
+    return;
+  }
+  lastStatusState = state;
+  lastStatusDetail = detail;
+  // A post-sync failure persists over the "idle" (sync-succeeded) state — the sync
+  // itself was fine, but the command wasn't, and a toast alone can be missed.
+  if (state === "idle" && postSyncFailedFolders.size > 0) {
+    statusBar.text = "$(warning) AI Setup Sync";
+    statusBar.tooltip = "AI Setup Sync: the Post Sync Command failed.\nClick for actions.";
+    statusBar.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
     return;
   }
   switch (state) {
@@ -62,6 +82,21 @@ function setStatus(
         (detail ? ` • ${detail}` : "") +
         "\nClick for actions.";
       statusBar.backgroundColor = undefined;
+  }
+}
+
+/** Records a folder's post-sync outcome, persists it, and re-renders the status bar if it changed. */
+function setPostSyncFolderFailed(folderKey: string, failed: boolean): void {
+  const wasFailed = postSyncFailedFolders.has(folderKey);
+  if (failed) {
+    postSyncFailedFolders.add(folderKey);
+  } else {
+    postSyncFailedFolders.delete(folderKey);
+  }
+  if (wasFailed !== failed) {
+    // Persistence is non-critical — ignore a storage-write failure rather than let it reject unhandled.
+    void extensionContext?.workspaceState.update(POST_SYNC_FAILED_KEY, [...postSyncFailedFolders]).then(undefined, () => {});
+    setStatus(lastStatusState, lastStatusDetail);
   }
 }
 
@@ -164,6 +199,13 @@ async function showMenu(context: vscode.ExtensionContext): Promise<void> {
       description: "Pull the latest setup files",
       run: () => runSync(context, true),
     },
+    ...(anyPostSyncCommandConfigured()
+      ? [{
+          label: "$(play) Run Post Sync Command",
+          description: "Run the configured command",
+          run: () => runPostSyncCommandNow(context),
+        }]
+      : []),
     {
       label: "$(output) Show Log",
       description: "Open the AI Setup Sync output channel",
@@ -235,6 +277,37 @@ function readSettings(): Settings {
   };
 }
 
+/** Reads the per-scope values (user/global vs workspace vs folder) of the `repository` setting. */
+function inspectRepository() {
+  return vscode.workspace.getConfiguration(CONFIG).inspect<string>("repository");
+}
+
+/**
+ * True when the sync repository is being withheld because the workspace is untrusted.
+ * `repository` is trust-restricted, so in an untrusted workspace VS Code suppresses a
+ * workspace/folder-scoped value and the effective setting reads empty. This distinguishes
+ * that case from a genuinely unconfigured extension, so we can prompt to trust rather than
+ * to configure. A user (global) value is always honored, so it never counts as blocked.
+ */
+function repositoryBlockedByTrust(): boolean {
+  if (vscode.workspace.isTrusted) {
+    return false;
+  }
+  const inspected = inspectRepository();
+  const suppressed = (inspected?.workspaceFolderValue ?? inspected?.workspaceValue ?? "").trim();
+  const globalRepoValue = (inspected?.globalValue ?? "").trim();
+  return !!suppressed && !globalRepoValue;
+}
+
+/** Prompts the user to trust the workspace so a workspace-configured repository can sync. */
+async function promptTrustToSync(kind: "warning" | "info"): Promise<void> {
+  const message = "AI Setup Sync: This workspace configures a sync repository, but it won't run until you trust the workspace.";
+  const show = kind === "warning" ? vscode.window.showWarningMessage : vscode.window.showInformationMessage;
+  if (await show(message, "Manage Workspace Trust")) {
+    await vscode.commands.executeCommand("workbench.trust.manage");
+  }
+}
+
 /** Extracts the repo slug (owner/name) from a repository URL. Accepts github.com and GitHub Enterprise Server URLs. Returns null if the URL is invalid. */
 function parseRepo(raw: string): string | null {
   const m = raw.match(/^https?:\/\/[^/]+\/([^/]+\/[^/]+?)(?:\.git)?\/?$/);
@@ -275,8 +348,7 @@ function tokenAllowedForHost(context: vscode.ExtensionContext, effectiveRepo: st
     return effHost === boundHost;
   }
   // Legacy/unbound token — use the user-level repository host as the baseline.
-  const inspected = vscode.workspace.getConfiguration(CONFIG).inspect<string>("repository");
-  const userHost = hostOf((inspected?.globalValue ?? "").trim());
+  const userHost = hostOf((inspectRepository()?.globalValue ?? "").trim());
   return userHost ? effHost === userHost : true;
 }
 
@@ -450,7 +522,7 @@ function handleSyncError(err: unknown, interactive: boolean): void {
           }
         });
       } else {
-        void vscode.window.showErrorMessage(`AI Setup Sync: ${msg}`, "Open settings").then((choice) => {
+        void vscode.window.showErrorMessage(`AI Setup Sync: ${msg}`, "Open Settings").then((choice) => {
           if (choice) {
             void vscode.commands.executeCommand("workbench.action.openSettings", err.setting ?? `${CONFIG}.repository`);
           }
@@ -468,8 +540,23 @@ const POST_SYNC_COMMAND_TIMEOUT_MS = 2 * 60 * 1000;
 // shouldn't fail with ENOBUFS. Still bounds memory against a real runaway.
 const POST_SYNC_COMMAND_MAX_BUFFER = 10 * 1024 * 1024;
 
+/**
+ * After a fast sync, its own notifications (progress closing, the "N added" summary toast)
+ * fire in a tight burst; a post-sync result toast raised in that window can be bumped to the
+ * notification center. Wait this long after the command finishes so the toast lands cleanly.
+ * (The status bar reflects failures regardless, so this only improves the transient toast.)
+ */
+const POST_SYNC_RESULT_SETTLE_MS = 750;
+
 /** Logged once per session so an untrusted workspace doesn't spam the log on every sync. */
 let warnedUntrustedPostSync = false;
+
+/**
+ * Per-folder commands already surfaced by an approval notification this session
+ * (folder key → command), so repeated syncs (window-focus, manual, startup) don't
+ * stack a second prompt for the same pending command. Replaced when the command changes.
+ */
+const postSyncApprovalPrompted = new Map<string, string>();
 
 /** Turns an exec failure into a cause the user can act on, not a bare/blank message. */
 function describeExecError(err: cp.ExecException, output: string): string {
@@ -485,8 +572,32 @@ function describeExecError(err: cp.ExecException, output: string): string {
   return output || err.message;
 }
 
+const POST_SYNC_APPROVED_KEY = "postSyncCommand.approved";
+
+/** The per-folder map of last-approved post-sync commands (folder key → command). */
+function getPostSyncApprovals(context: vscode.ExtensionContext): Record<string, string> {
+  return context.workspaceState.get<Record<string, string>>(POST_SYNC_APPROVED_KEY) ?? {};
+}
+
+/** Records `command` as approved for a folder so it runs silently until it changes again. */
+function recordPostSyncApproval(
+  context: vscode.ExtensionContext,
+  folderKey: string,
+  command: string
+): Thenable<void> {
+  return context.workspaceState.update(POST_SYNC_APPROVED_KEY, { ...getPostSyncApprovals(context), [folderKey]: command });
+}
+
 /**
- * Runs the `postSyncCommand` of every folder whose sync changed files.
+ * Runs the `postSyncCommand` of every folder whose sync changed files, plus any
+ * folder whose command differs from the one last approved — so a newly added or
+ * edited command runs on the next sync even when no files changed, rather than
+ * sitting unused until the next real change.
+ *
+ * A command that needs approval is surfaced as a dismissible notification (see
+ * `promptPostSyncApproval`) — the same prompt for manual and background syncs, so
+ * they can't stack two prompts. It runs when the user clicks Run on it; once approved
+ * for a folder it runs silently until it changes.
  *
  * Deliberately runs *after* the whole sync (all folders + progress notification)
  * finishes, so a slow build step isn't shown as "Syncing files" and one folder's
@@ -495,17 +606,31 @@ function describeExecError(err: cp.ExecException, output: string): string {
  * Security: the setting is workspace-settable (that's its value — per-project
  * generate steps), so a cloned repo's .vscode/settings.json could carry a
  * malicious command. Workspace Trust is the gate that stops that — nothing runs
- * until the user trusts the workspace. (Running only on changed syncs is a
- * behavior choice, to skip no-op focus syncs, not a security control.)
+ * until the user trusts the workspace. (Running only on changed/changed-command
+ * syncs is a behavior choice, to skip no-op focus syncs, not a security control.)
  * Failures are logged and toasted but never fail the sync itself.
  */
-async function runPostSyncCommands(folders: vscode.WorkspaceFolder[]): Promise<void> {
+async function runPostSyncCommands(
+  context: vscode.ExtensionContext,
+  folders: readonly vscode.WorkspaceFolder[],
+  changedFolders: readonly vscode.WorkspaceFolder[],
+  interactive: boolean
+): Promise<void> {
   const jobs = folders
     .map((folder) => ({
       folder,
       command: (vscode.workspace.getConfiguration(CONFIG, folder.uri).get<string>("postSyncCommand") ?? "").trim(),
     }))
     .filter((job) => job.command);
+  // Clear a stuck failure state for any folder that no longer has a command (setting
+  // removed/emptied) or was removed from the workspace, so the status bar doesn't stay
+  // yellow for a command that can't run anymore.
+  const jobKeys = new Set(jobs.map((job) => job.folder.uri.toString()));
+  for (const key of [...postSyncFailedFolders]) {
+    if (!jobKeys.has(key)) {
+      setPostSyncFolderFailed(key, false);
+    }
+  }
   if (jobs.length === 0) {
     return;
   }
@@ -516,20 +641,230 @@ async function runPostSyncCommands(folders: vscode.WorkspaceFolder[]): Promise<v
     }
     return;
   }
+  const changedKeys = new Set(changedFolders.map((f) => f.uri.toString()));
 
-  await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: "AI Setup Sync: Running post-sync command" },
-    async () => {
-      for (const { folder, command } of jobs) {
-        await execPostSyncCommand(folder, command);
-      }
+  // Trust is granted once per workspace, but a later `git pull` could swap the
+  // checked-in command for a different one. Re-confirm whenever the command for a
+  // folder differs from the one the user last approved, so a silent change can't
+  // run unnoticed.
+  const approvals = getPostSyncApprovals(context);
+  const approved: typeof jobs = [];
+  for (const job of jobs) {
+    const key = job.folder.uri.toString();
+    const needsApproval = approvals[key] !== job.command;
+    // A manual sync retries a folder whose command last failed, so "Sync Now" clears a
+    // stuck failure state even when nothing else changed.
+    const retryFailed = interactive && postSyncFailedFolders.has(key);
+    // Run when this folder's files changed, its command is new/edited, or we're retrying a
+    // failure. A no-op background sync with an already-approved command is skipped.
+    if (!changedKeys.has(key) && !needsApproval && !retryFailed) {
+      continue;
     }
+    if (needsApproval) {
+      // Surface the approval notification; the command runs when the user clicks Run,
+      // not as part of this batch. A manual sync always re-shows it; a background sync
+      // shows it once per session so window-focus can't spam it.
+      promptPostSyncApproval(context, job.folder, job.command, interactive);
+      continue;
+    }
+    approved.push(job);
+  }
+  if (approved.length === 0) {
+    return;
+  }
+  await runPostSyncJobs(approved);
+}
+
+/** True if any open workspace folder has a non-empty `postSyncCommand`. */
+function anyPostSyncCommandConfigured(): boolean {
+  return (vscode.workspace.workspaceFolders ?? []).some(
+    (folder) => (vscode.workspace.getConfiguration(CONFIG, folder.uri).get<string>("postSyncCommand") ?? "").trim() !== ""
   );
 }
 
-async function execPostSyncCommand(folder: vscode.WorkspaceFolder, command: string): Promise<void> {
+/**
+ * Runs the configured post-sync command(s) on demand (menu or Command Palette), independent
+ * of a sync. Reuses `runPostSyncCommands` by treating every folder as changed, so each command
+ * is considered regardless of file changes — approving/running or re-prompting as appropriate.
+ */
+async function runPostSyncCommandNow(context: vscode.ExtensionContext): Promise<void> {
+  // The Command Palette runs this regardless of config (unlike the menu item, which is
+  // hidden when unset), so guide the user rather than silently doing nothing.
+  if (!anyPostSyncCommandConfigured()) {
+    void vscode.window
+      .showInformationMessage("AI Setup Sync: No Post Sync Command configured.", "Open Settings")
+      .then((choice) => {
+        if (choice) {
+          void openPostSyncSetting();
+        }
+      });
+    return;
+  }
+  if (syncing) {
+    void vscode.window.showInformationMessage("AI Setup Sync: a sync or command is already running.");
+    return;
+  }
+  if (!vscode.workspace.isTrusted) {
+    void vscode.window
+      .showWarningMessage("AI Setup Sync: trust this workspace to run the Post Sync Command.", "Manage Workspace Trust")
+      .then((choice) => {
+        if (choice) {
+          void vscode.commands.executeCommand("workbench.trust.manage");
+        }
+      });
+    return;
+  }
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  syncing = true;
+  try {
+    await runPostSyncCommands(context, folders, folders, true);
+  } finally {
+    syncing = false;
+  }
+}
+
+/**
+ * Runs post-sync command jobs in one progress notification, then reports the outcome.
+ * Toasts fire after the run (not from inside `execPostSyncCommand`) and after a short
+ * settle, so they aren't dropped in the sync's own notification burst — see below.
+ */
+async function runPostSyncJobs(
+  jobs: ReadonlyArray<{ folder: vscode.WorkspaceFolder; command: string }>
+): Promise<void> {
+  const succeeded: Array<{ folder: string; command: string }> = [];
+  const failed: Array<{ folder: string; command: string }> = [];
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: "AI Setup Sync: Running Post Sync Command" },
+    async () => {
+      for (const { folder, command } of jobs) {
+        const ok = await execPostSyncCommand(folder, command);
+        // Persistent per-folder signal: a fast sync's notification burst can bump the
+        // toast to the notification center, so also reflect failure in the status bar
+        // (and a manual sync retries failed folders). Cleared here when it next succeeds.
+        setPostSyncFolderFailed(folder.uri.toString(), !ok);
+        if (ok) {
+          succeeded.push({ folder: folder.name, command });
+        } else {
+          failed.push({ folder: folder.name, command });
+        }
+      }
+    }
+  );
+  // Let the sync's own notification burst clear before showing ours, so the result toast
+  // isn't dropped/bumped to the notification center on a fast sync.
+  await new Promise<void>((resolve) => setTimeout(resolve, POST_SYNC_RESULT_SETTLE_MS));
+  for (const { folder, command } of failed) {
+    void vscode.window
+      .showErrorMessage(`AI Setup Sync: Post Sync Command failed in "${folder}" — ${command}`, "Show Log", "Open Settings")
+      .then((choice) => {
+        if (choice === "Open Settings") {
+          void openPostSyncSetting();
+        } else if (choice) {
+          showOutput();
+        }
+      });
+  }
+  if (failed.length === 0 && succeeded.length > 0) {
+    // Show Log lets you check the command's output; matches the failure toast and the sync summary.
+    void vscode.window
+      .showInformationMessage(
+        succeeded.length === 1
+          ? `AI Setup Sync: Post Sync Command finished for "${succeeded[0].folder}" — ${succeeded[0].command}`
+          : `AI Setup Sync: ${succeeded.length} Post Sync Commands finished.`,
+        "Show Log"
+      )
+      .then((choice) => {
+        if (choice) {
+          showOutput();
+        }
+      });
+  }
+}
+
+/** Opens Settings focused on the post-sync command setting. */
+function openPostSyncSetting(): Thenable<unknown> {
+  return vscode.commands.executeCommand("workbench.action.openSettings", `${CONFIG}.postSyncCommand`);
+}
+
+/**
+ * Records approval for a folder's post-sync command and runs it, holding the
+ * `syncing` guard so a sync can't start writing files while the command runs. Used
+ * for the out-of-band run when the user clicks Run on the approval notification (the
+ * in-sync batch in `runPostSyncCommands` already runs under the guard). If a sync is
+ * already in flight, the approval is still recorded but the immediate run is skipped
+ * to avoid overlap — it runs on the next qualifying sync.
+ */
+async function approveAndRunPostSyncCommand(
+  context: vscode.ExtensionContext,
+  folder: vscode.WorkspaceFolder,
+  command: string
+): Promise<void> {
+  const key = folder.uri.toString();
+  // Idempotent: if this exact command is already approved (e.g. the user clicked Run
+  // on a duplicate notification, or a sync already ran it), don't run it a second time.
+  if (getPostSyncApprovals(context)[key] === command) {
+    return;
+  }
+  await recordPostSyncApproval(context, key, command);
+  if (syncing) {
+    log(`Post-sync command for ${folder.name} approved; a sync is in progress, so it will run on the next sync that changes this folder.`);
+    return;
+  }
+  syncing = true;
+  try {
+    await runPostSyncJobs([{ folder, command }]);
+  } finally {
+    syncing = false;
+  }
+}
+
+/**
+ * Surfaces a new/changed post-sync command as a dismissible notification with a
+ * **Run** action — the single approval prompt for both manual and background syncs.
+ * A background sync shows it at most once per (folder, command) per session so
+ * window-focus can't spam it; a manual sync passes `force` to re-show even if it was
+ * already surfaced (so dismissing it doesn't leave a manual Sync Now doing nothing).
+ * Clicking **Run** records the approval and runs it; dismissing leaves it unapproved.
+ * The run is idempotent, so a duplicate notification can't run the command twice.
+ */
+function promptPostSyncApproval(
+  context: vscode.ExtensionContext,
+  folder: vscode.WorkspaceFolder,
+  command: string,
+  force: boolean
+): void {
+  const key = folder.uri.toString();
+  if (!force && postSyncApprovalPrompted.get(key) === command) {
+    return;
+  }
+  postSyncApprovalPrompted.set(key, command);
+  // A previously-approved (different) command means this one was changed — call that out,
+  // since a swapped command (e.g. from a `git pull`) is the case worth scrutinizing.
+  const changed = Boolean(getPostSyncApprovals(context)[key]);
+  log(`Post-sync command for ${folder.name} ${changed ? "changed and needs" : "needs"} approval: ${command}`);
+  const message = changed
+    ? `AI Setup Sync: Post Sync Command for "${folder.name}" changed. Run it? — ${command}`
+    : `AI Setup Sync: Run Post Sync Command for "${folder.name}"? — ${command}`;
+  void vscode.window
+    .showWarningMessage(message, "Run", "Open Settings")
+    .then(async (choice) => {
+      if (choice === "Open Settings") {
+        await openPostSyncSetting();
+        return;
+      }
+      if (choice !== "Run") {
+        return;
+      }
+      await approveAndRunPostSyncCommand(context, folder, command);
+    })
+    .then(undefined, (err: unknown) => {
+      log(`Post-sync command approval failed for ${folder.name}: ${err instanceof Error ? err.message : String(err)}`);
+    });
+}
+
+/** Runs one command, logging its output. Returns true on success, false on failure. Shows no UI. */
+async function execPostSyncCommand(folder: vscode.WorkspaceFolder, command: string): Promise<boolean> {
   log(`Running post-sync command in ${folder.name}: ${command}`);
-  const started = Date.now();
   try {
     const output = await new Promise<string>((resolve, reject) => {
       cp.exec(
@@ -548,18 +883,12 @@ async function execPostSyncCommand(folder: vscode.WorkspaceFolder, command: stri
     if (output) {
       log(output);
     }
-    log(`Post-sync command finished in ${((Date.now() - started) / 1000).toFixed(1)}s.`);
+    log(`Post-sync command finished in ${folder.name}.`);
+    return true;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`Post-sync command failed: ${msg}`);
-    void vscode.window.showErrorMessage(
-      `AI Setup Sync: Post-sync command failed in ${folder.name}.`,
-      "Show Log"
-    ).then((choice) => {
-      if (choice) {
-        showOutput();
-      }
-    });
+    return false;
   }
 }
 
@@ -577,10 +906,18 @@ async function runSync(
   const settings = readSettings();
   if (!settings.repository) {
     setStatus("unconfigured");
+    if (repositoryBlockedByTrust()) {
+      if (interactive) {
+        await promptTrustToSync("warning");
+      } else {
+        log("Sync skipped: the repository is set in workspace settings but the workspace is not trusted. Trust it to sync.");
+      }
+      return;
+    }
     if (interactive) {
       const choice = await vscode.window.showWarningMessage(
         "AI Setup Sync: No repository configured — add a GitHub repository URL in settings to start syncing.",
-        "Open settings"
+        "Open Settings"
       );
       if (choice) {
         await vscode.commands.executeCommand("workbench.action.openSettings", `${CONFIG}.repository`);
@@ -603,7 +940,7 @@ async function runSync(
     log(msg);
     setStatus("error", msg);
     if (interactive) {
-      void vscode.window.showErrorMessage(msg, "Open settings").then((choice) => {
+      void vscode.window.showErrorMessage(msg, "Open Settings").then((choice) => {
         if (choice) {
           void vscode.commands.executeCommand("workbench.action.openSettings", `${CONFIG}.repository`);
         }
@@ -706,7 +1043,7 @@ async function runSync(
     if (noFilesFound) {
       void vscode.window.showWarningMessage(
         `AI Setup Sync: No files found to sync. Check that "${settings.branch}" is the correct branch and that the paths in Target Folders exist in your repo.`,
-        "Open settings"
+        "Open Settings"
       ).then((choice) => {
         if (choice) {
           void vscode.commands.executeCommand("workbench.action.openSettings", `${CONFIG}.branch`);
@@ -715,9 +1052,9 @@ async function runSync(
     } else if (changed && summaries.length > 0) {
       void vscode.window.showInformationMessage(
         `AI Setup Sync: ${summaries.join(" ")}`,
-        "Show details"
+        "Show Log"
       ).then((choice) => {
-        if (choice === "Show details") {
+        if (choice === "Show Log") {
           showOutput();
         }
       });
@@ -738,7 +1075,7 @@ async function runSync(
     // a workspace-scoped repository URL can't retroactively claim the token, while the
     // common "token saved, repo set globally" case stops lingering in the unbound state.
     if (token && !getTokenHost(context)) {
-      const globalRepo = vscode.workspace.getConfiguration(CONFIG).inspect<string>("repository")?.globalValue ?? "";
+      const globalRepo = inspectRepository()?.globalValue ?? "";
       const globalHost = hostOf(globalRepo.trim());
       if (globalHost) {
         await setToken(context, token, globalHost);
@@ -770,7 +1107,7 @@ async function runSync(
   // The file sync (and its progress notification) is fully done. Run post-sync
   // commands now, still under the `syncing` guard so a new sync can't overlap.
   try {
-    await runPostSyncCommands(changedFolders);
+    await runPostSyncCommands(context, folders, changedFolders, interactive);
   } finally {
     syncing = false;
   }
@@ -837,19 +1174,19 @@ async function removeSyncedFiles(context: vscode.ExtensionContext): Promise<void
     log(`Removed 0 synced files.`);
   }
 
-  const showDetails = (choice: string | undefined) => { if (choice === "Show details") { showOutput(); } };
+  const showLogIfChosen = (choice: string | undefined) => { if (choice === "Show Log") { showOutput(); } };
   if (kept > 0) {
     void vscode.window.showWarningMessage(
       deleted > 0
         ? `AI Setup Sync: Removed ${deleted} ${deleted === 1 ? "file" : "files"}, kept ${kept} with local edits.`
         : `AI Setup Sync: ${kept} ${kept === 1 ? "file" : "files"} kept due to local edits.`,
-      "Show details"
-    ).then(showDetails);
+      "Show Log"
+    ).then(showLogIfChosen);
   } else if (deleted > 0) {
     void vscode.window.showInformationMessage(
       `AI Setup Sync: Removed ${deleted} synced ${deleted === 1 ? "file" : "files"}.`,
-      "Show details"
-    ).then(showDetails);
+      "Show Log"
+    ).then(showLogIfChosen);
   }
 }
 
@@ -868,6 +1205,10 @@ async function maybeShowWelcome(context: vscode.ExtensionContext): Promise<void>
     return;
   }
   welcomeShownThisSession = true;
+  if (repositoryBlockedByTrust()) {
+    await promptTrustToSync("info");
+    return;
+  }
   const choice = await vscode.window.showInformationMessage(
     "AI Setup Sync: Add a GitHub repository to start syncing your AI config across projects.",
     "Open Settings"
@@ -882,6 +1223,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   initOutput(context);
   log(`Activated. Source: ${settings.repository || "(unconfigured)"}@${settings.branch}.`);
+
+  // Restore persisted post-sync failures so the warning (and Sync Now retry) survive a reload.
+  extensionContext = context;
+  for (const key of context.workspaceState.get<string[]>(POST_SYNC_FAILED_KEY) ?? []) {
+    postSyncFailedFolders.add(key);
+  }
 
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBar.command = `${CONFIG}.showMenu`;
@@ -908,8 +1255,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand(`${CONFIG}.syncNow`, () =>
       runSync(context, true)
     ),
+    vscode.commands.registerCommand(`${CONFIG}.runPostSyncCommand`, () =>
+      runPostSyncCommandNow(context)
+    ),
     vscode.commands.registerCommand(`${CONFIG}.removeSyncedFiles`, () =>
       removeSyncedFiles(context)
+    ),
+    vscode.commands.registerCommand(`${CONFIG}.showLog`, () => showOutput()),
+    vscode.commands.registerCommand(`${CONFIG}.openSettings`, () =>
+      vscode.commands.executeCommand("workbench.action.openSettings", `@ext:${context.extension.id}`)
     ),
     vscode.commands.registerCommand(`${CONFIG}.setGitHubToken`, async () => {
       const existing = await getToken(context);
