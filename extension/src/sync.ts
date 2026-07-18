@@ -836,8 +836,20 @@ export async function applyGitExclude(
   const infoDir = vscode.Uri.joinPath(gitDir, "info");
   const excludeUri = vscode.Uri.joinPath(infoDir, "exclude");
   const existing = (await readIfExists(excludeUri))?.toString("utf8") ?? "";
-  const next = upsertBlock(existing, computePatterns(managedPaths));
 
+  // No managed files — strip our block entirely rather than writing an empty one.
+  // upsertBlock([]) would leave a markers-only block behind, which lingers forever
+  // (the registry entry is cleared alongside, so uninstall/"Remove Synced Files"
+  // never revisit this workspace). Mirrors applyWorktreeInclude's zero-path handling.
+  if (managedPaths.length === 0) {
+    if (!existing.includes(MARKER_BEGIN)) {
+      return; // nothing of ours to remove
+    }
+    await vscode.workspace.fs.writeFile(excludeUri, Buffer.from(stripBlock(existing), "utf8"));
+    return;
+  }
+
+  const next = upsertBlock(existing, computePatterns(managedPaths));
   if (next !== undefined) {
     await vscode.workspace.fs.createDirectory(infoDir);
     await vscode.workspace.fs.writeFile(excludeUri, Buffer.from(next, "utf8"));

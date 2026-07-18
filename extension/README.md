@@ -433,6 +433,9 @@ Only files whose content matches what the extension last wrote are removed — f
 locally are kept so no work is lost. If any files are kept, a warning toast appears with a
 **Show details** button that lists them in the **AI Setup Sync** output channel.
 
+Cleanup also strips the managed block from `.git/info/exclude` and removes `.worktreeinclude`, so
+once nothing is synced no trace of the extension is left in your repository.
+
 ## FAQ
 
 **When does it sync?**

@@ -4,6 +4,14 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.7.4] — 2026-07-18
+
+### Fixed
+
+- **No leftover block in `.git/info/exclude`** — when the last synced file is removed (or a sync matches no files, e.g. a wrong branch), the extension now fully strips its managed block from `.git/info/exclude` instead of leaving an empty one behind. Previously the empty block could linger even after uninstall.
+
+---
+
 ## [1.7.3] — 2026-07-14
 
 ### Security
