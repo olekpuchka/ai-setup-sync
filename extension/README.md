@@ -7,9 +7,9 @@
 
 **One repo. Every project. Always in sync.**
 
-Every AI coding tool needs its own config files in every repo. AI Setup Sync maintains yours once
-in a GitHub repository and distributes it automatically across every project — Claude Code, GitHub
-Copilot, Cursor, Google Antigravity, OpenAI Codex, and more. No copy-pasting.
+Every AI coding tool needs its own config files in every repo. AI Setup Sync syncs your AI setup
+files and MCP configs (Claude Code, Copilot, Cursor, Codex, Antigravity and more) from a GitHub repo
+into every project automatically. No copy-pasting.
 
 Treat your AI setup like shared code: change it in one place, and it propagates everywhere.
 

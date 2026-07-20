@@ -4,6 +4,14 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.7.5] — 2026-07-20
+
+### Changed
+
+- **Refreshed the extension description** — the Marketplace listing and READMEs now lead with "syncs AI setup files and MCP configs (Claude Code, Copilot, Cursor, Codex, Antigravity and more)," making the MCP-config support explicit and consistent across every surface.
+
+---
+
 ## [1.7.4] — 2026-07-18
 
 ### Fixed
