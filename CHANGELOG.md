@@ -4,6 +4,14 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.7.6] — 2026-07-24
+
+### Changed
+
+- **First-run nudge can be dismissed for good** — the "Add a GitHub repository" welcome notification now has a **Don't Show Again** button alongside **Open Settings**. Choosing it silences the nudge permanently across all windows and projects. Previously the only way to stop the reminder was to configure a repository, so users who deliberately left a project unconfigured were re-prompted on every window reload.
+
+---
+
 ## [1.7.5] — 2026-07-20
 
 ### Changed

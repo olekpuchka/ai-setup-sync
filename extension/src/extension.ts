@@ -1193,15 +1193,24 @@ async function removeSyncedFiles(context: vscode.ExtensionContext): Promise<void
 /** Session-scoped, so the nudge reshows on the next window while still unconfigured. */
 let welcomeShownThisSession = false;
 
+/** globalState flag set by "Don't Show Again" — silences the welcome nudge permanently, everywhere. */
+const WELCOME_DISMISSED_KEY = "welcome.dismissed";
+
 /**
  * First-run nudge: a new user has no way to discover they must set a repository —
  * the status-bar gear is easy to miss and background syncs stay silent. Show one
  * dismissible prompt per session while unconfigured (the flag resets on window
  * reload, so a still-unconfigured project nudges again next time), and never once
  * a repository is set. Skipped in an empty window — nothing to sync into there.
+ * "Don't Show Again" persists to globalState and silences the nudge for good.
  */
 async function maybeShowWelcome(context: vscode.ExtensionContext): Promise<void> {
-  if (welcomeShownThisSession || !vscode.workspace.workspaceFolders?.length || readSettings().repository) {
+  if (
+    welcomeShownThisSession ||
+    context.globalState.get<boolean>(WELCOME_DISMISSED_KEY) ||
+    !vscode.workspace.workspaceFolders?.length ||
+    readSettings().repository
+  ) {
     return;
   }
   welcomeShownThisSession = true;
@@ -1211,10 +1220,13 @@ async function maybeShowWelcome(context: vscode.ExtensionContext): Promise<void>
   }
   const choice = await vscode.window.showInformationMessage(
     "AI Setup Sync: Add a GitHub repository to start syncing your AI config across projects.",
-    "Open Settings"
+    "Open Settings",
+    "Don't Show Again"
   );
-  if (choice) {
+  if (choice === "Open Settings") {
     await vscode.commands.executeCommand("workbench.action.openSettings", `@ext:${context.extension.id}`);
+  } else if (choice === "Don't Show Again") {
+    await context.globalState.update(WELCOME_DISMISSED_KEY, true);
   }
 }
 

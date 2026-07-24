@@ -2,7 +2,7 @@
   "name": "ai-setup-sync",
   "displayName": "AI Setup Sync",
   "description": "Syncs AI setup files and MCP configs (Claude Code, Copilot, Cursor, Codex, Antigravity and more) from a GitHub repo into every project automatically.",
-  "version": "1.7.5",
+  "version": "1.7.6",
   "publisher": "olekpuchka",
   "author": {
     "name": "Olek Puchka"
