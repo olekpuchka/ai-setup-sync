@@ -64,7 +64,7 @@ those edits and lets you choose what to keep, so no work is ever silently overwr
 
 ## Requirements
 
-- **VS Code 1.85** or later.
+- **VS Code 1.125** or later.
 - **A GitHub repository** containing your shared AI setup files — public, private, SAML SSO org, or hosted on GitHub Enterprise Server.
 - **For private, SSO-protected, or Enterprise Server repos:** a GitHub **classic** personal access token with the **`repo`** scope.
 

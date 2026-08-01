@@ -1,12 +1,10 @@
-// Runs on extension uninstall (declared as "vscode:uninstall" in package.json).
-// This is a plain Node process: NO vscode API, NO workspace context. It reads
-// the registry written during syncs and removes the files we created.
+// Runs on extension uninstall ("vscode:uninstall" in package.json). A plain Node process:
+// no vscode API, no workspace context. Reads the registry written during syncs and removes
+// the files we created.
 //
-// NOTE on timing: VS Code runs this via child_process.fork(), i.e. its own
-// bundled Node runtime (no system `node`/PATH needed), but only after VS Code is
-// fully RESTARTED following the uninstall — not when you click Uninstall. There
-// is also a ~5s budget, so keep this fast. For immediate cleanup, use the
-// "AI Setup Sync: Remove Synced Files" command before uninstalling.
+// Timing: VS Code forks this with its own bundled Node, but only after VS Code is fully
+// RESTARTED following the uninstall — not when you click Uninstall — and with a ~5s budget,
+// so keep it fast. For immediate cleanup use the "Remove Synced Files" command instead.
 
 import * as fs from "fs";
 import { removeManagedFiles } from "./cleanup";

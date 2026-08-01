@@ -35,11 +35,10 @@ export function readRegistry(): Registry {
 }
 
 /**
- * Writes the registry via a temp file + atomic rename so a concurrent reader (or
- * another VS Code window) never sees a half-written file. A lost update is still
- * possible if two windows write at the same instant, but the worst case is bounded
- * — the uninstall hook misses one workspace's files, which "Remove Synced Files"
- * can still clean from within that workspace (it also reads globalState).
+ * Writes via temp file + atomic rename so a concurrent reader never sees a half-written
+ * file. Two windows writing at the same instant can still lose an update, but the worst
+ * case is bounded: the uninstall hook misses one workspace, which "Remove Synced Files"
+ * can still clean from inside that workspace.
  */
 function writeRegistry(reg: Registry): void {
   fs.mkdirSync(registryDir(), { recursive: true });

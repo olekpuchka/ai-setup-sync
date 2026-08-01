@@ -4,6 +4,31 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.8.0] — 2026-08-01
+
+### Breaking
+
+- **Minimum VS Code is now 1.125** (was 1.85). VS Code 1.123 was the first release to ship Node 24, and the extension is now built and typed against that runtime. On older VS Code the extension will not install or update.
+
+### Fixed
+
+- **Unreadable files are no longer treated as missing** — a managed file that exists but can't be read (permissions, or a directory where a file is expected) was indistinguishable from a deleted one, so the sync would overwrite it, or drop it from tracking and orphan it. Such files are now left untouched and logged, and the next sync retries.
+- **`.git/info/exclude` and `.worktreeinclude` are no longer rewritten from an empty base** — if either file existed but couldn't be read, it was rewritten containing only the managed block, discarding any rules you had added yourself. Both are now left untouched when unreadable.
+- **File watching no longer breaks on unusual filenames** — a comma or glob character in a synced path could produce a watch pattern that stopped matching that file, so edits to it stayed hidden from git. Each managed root is now watched separately, with a safe fallback.
+- **A renamed or moved repository now says so** — after a repo was renamed or transferred, the tree fetch followed the redirect but every individual file failed with an opaque `HTTP 301`, repeating on every sync. File fetches now follow redirects too (dropping the token if the redirect crosses hosts) and otherwise report that the repository URL needs updating.
+- **Settings edited while VS Code was closed now take effect** — changing `targetFolders` or `pathMappings` in `settings.json` outside a session left the cached tree unchanged, so newly-included files were never fetched and newly-excluded ones were never cleaned up, sometimes for weeks. The synced paths are now fingerprinted, and a change forces a full refresh.
+- **`.worktreeinclude` no longer appears as an untracked file** — if every synced file in a project had local edits, the managed block was stripped from `.git/info/exclude` while `.worktreeinclude` was still written, leaving it visible in `git status`.
+- **A failed deletion is retried** — when a file removed from the repo couldn't be deleted (locked or read-only), the warning promised a retry but the sync cached its state, so the deletion was stranded until the repo changed again.
+- **More reliable GitHub request timeouts** — the idle timer was needlessly re-armed on every received chunk, and a mid-stream response failure could leave a request hanging instead of failing. Both are fixed; a slow-but-progressing download is still not killed.
+
+### Changed
+
+- **Faster syncs on large setups** — both sync paths compared every managed file against disk one file at a time. Those reads now run concurrently, which most benefits the common no-change sync, where the comparison was the bulk of the work. Conflict-prompt and log ordering remain deterministic.
+- **Much cheaper file watching** — the watcher subscribed to every file event in the workspace (build output, `node_modules`, bundlers in watch mode) and discarded nearly all of them. It now watches only the roots that contain managed files.
+- **Internal restructuring** — the post-sync command lifecycle, file watcher, and status bar moved out of `extension.ts` into their own modules, and the sync/post-sync mutex is now a single shared lock rather than a flag reached into from several places. No behavior change.
+
+---
+
 ## [1.7.6] — 2026-07-24
 
 ### Changed

@@ -112,10 +112,8 @@ function request(url: string, headers: Record<string, string>): Promise<RequestR
       { headers: { "User-Agent": USER_AGENT, ...headers } },
       (res) => {
         const chunks: Buffer[] = [];
-        res.on("data", (c) => {
-          chunks.push(c as Buffer);
-          req.setTimeout(30000); // reset idle timer while data is flowing
-        });
+        res.on("data", (c) => chunks.push(c as Buffer));
+        res.on("error", reject); // mid-stream failure (e.g. premature close)
         res.on("end", () =>
           resolve({
             status: res.statusCode ?? 0,
@@ -127,6 +125,8 @@ function request(url: string, headers: Record<string, string>): Promise<RequestR
       }
     );
     req.on("error", reject);
+    // Socket-level inactivity timeout; it re-arms on activity, so a slow-but-progressing
+    // download is not killed and no per-chunk rearming is needed.
     req.setTimeout(30000, () => req.destroy(new Error("GitHub request timed out")));
   });
 }
@@ -141,11 +141,10 @@ function parseRetryAfterMs(headers: Record<string, string | string[] | undefined
 }
 
 /**
- * How long to wait before retrying a 403/429, or null to not retry. Only a secondary
- * (abuse) rate limit — which GitHub signals with `Retry-After` — is retried, since it
- * clears quickly. Primary-quota exhaustion and hard 403s (SSO/permission) have no
- * `Retry-After` and can't clear in a useful window, so they fail fast instead. The
- * wait is capped so a single retry can't stall the sync for too long.
+ * How long to wait before retrying a 403/429, or null to not retry. Only a secondary (abuse)
+ * limit is retried — GitHub signals it with `Retry-After` and it clears quickly. Primary-quota
+ * exhaustion and hard 403s (SSO/permission) send no `Retry-After` and so fail fast. Capped so
+ * one retry can't stall the sync.
  */
 function rateLimitRetryDelayMs(res: RequestResult): number | null {
   if (res.status !== 403 && res.status !== 429) {
@@ -252,9 +251,9 @@ async function getJson(
   if (status >= 301 && status <= 308) {
     const location = headers["location"];
     if (location && redirectsLeft > 0) {
-      // Resolve relative Location against the current URL, and drop the token when
-      // the redirect crosses to a different origin — never forward credentials to a
-      // host we didn't authenticate to (SEC: cross-host auth leak on redirect).
+      // Resolve a relative Location against the current URL, and drop the token when the
+      // redirect crosses origins — never forward credentials to a host we didn't
+      // authenticate to.
       const nextUrl = new URL(String(location), url).toString();
       const nextToken = sameOrigin(url, nextUrl) ? token : undefined;
       return getJson(nextUrl, nextToken, etag, redirectsLeft - 1);
@@ -385,9 +384,39 @@ export async function getRawFile(
     url = `https://raw.githubusercontent.com/${encodeRepoSlug(repo)}/${encodeURIComponent(ref)}/${encodedPath}`;
     requestHeaders = {};
   }
+  return fetchRaw(url, requestHeaders, path);
+}
+
+/**
+ * Fetches raw bytes, following redirects the way getJson does.
+ *
+ * Without this a renamed or transferred repository fails every single file with an opaque
+ * HTTP 301 — the tree request follows the redirect and succeeds, so the one error the code
+ * knows how to explain ("update the repository URL") is never surfaced.
+ */
+async function fetchRaw(
+  url: string,
+  requestHeaders: Record<string, string>,
+  path: string,
+  redirectsLeft = 3
+): Promise<Buffer> {
   const { status, body, headers } = await requestWithRetry(url, requestHeaders);
   if (status === 403 || status === 429) {
     throw rateLimitError(headers);
+  }
+  if (status >= 301 && status <= 308) {
+    const location = headers["location"];
+    if (location && redirectsLeft > 0) {
+      const nextUrl = new URL(String(location), url).toString();
+      // Never forward credentials to a host we didn't authenticate to.
+      const nextHeaders = sameOrigin(url, nextUrl)
+        ? requestHeaders
+        : Object.fromEntries(Object.entries(requestHeaders).filter(([k]) => k.toLowerCase() !== "authorization"));
+      return fetchRaw(nextUrl, nextHeaders, path, redirectsLeft - 1);
+    }
+    throw new ConfigError(
+      `The repository may have been renamed or moved. Update the repository URL in extension settings.`
+    );
   }
   if (status < 200 || status >= 300) {
     throw new HttpError(status, `Failed to fetch ${path} (HTTP ${status}).`);

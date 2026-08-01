@@ -2,7 +2,7 @@
   "name": "ai-setup-sync",
   "displayName": "AI Setup Sync",
   "description": "Syncs AI setup files and MCP configs (Claude Code, Copilot, Cursor, Codex, Antigravity and more) from a GitHub repo into every project automatically.",
-  "version": "1.7.6",
+  "version": "1.8.0",
   "publisher": "olekpuchka",
   "author": {
     "name": "Olek Puchka"
@@ -14,7 +14,7 @@
     "theme": "dark"
   },
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.125.0"
   },
   "categories": [
     "Other",
@@ -150,14 +150,15 @@
     "clean": "rm -rf dist",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "npm run clean && cp ../CHANGELOG.md . && tsc -p ./",
+    "package": "npm run clean && cp ../CHANGELOG.md . && tsc -p ./ && npm run check:uninstall",
     "lint": "tsc -p ./ --noEmit",
-    "vsce:package": "vsce package --no-dependencies --out /tmp/ai-setup-sync.vsix"
+    "vsce:package": "vsce package --no-dependencies --out /tmp/ai-setup-sync.vsix",
+    "check:uninstall": "node -e \"require('./dist/cleanup.js'); require('./dist/registry.js')\""
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
-    "@types/vscode": "^1.85.0",
+    "@types/node": "24.x",
+    "@types/vscode": "1.125.0",
     "@vscode/vsce": "^3.0.0",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   }
 }

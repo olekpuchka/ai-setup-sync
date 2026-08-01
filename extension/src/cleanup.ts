@@ -1,6 +1,8 @@
 // Shared cleanup logic used by BOTH the in-app "Remove Synced Files" command
 // (runs in the extension host) and the best-effort vscode:uninstall hook (plain
-// Node). Keep it vscode-free so the uninstall script can require it.
+// Node). Keep it vscode-free so the uninstall script can require it — importing
+// vscode here fails `npm run check:uninstall`, and would otherwise break uninstall
+// silently, leaving synced files behind in every project.
 
 import * as fs from "fs";
 import * as path from "path";

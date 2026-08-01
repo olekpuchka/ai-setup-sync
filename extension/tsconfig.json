@@ -1,9 +1,11 @@
 {
   "compilerOptions": {
     "module": "commonjs",
-    "target": "ES2021",
+    // Tracks the extension-host runtime (engines.vscode ^1.125.0 ships Node 24).
+    // Keep `lib` explicit: omitting it pulls in DOM types the extension host lacks.
+    "target": "ES2024",
     "lib": [
-      "ES2021"
+      "ES2024"
     ],
     "outDir": "dist",
     "rootDir": "src",

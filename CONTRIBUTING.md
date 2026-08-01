@@ -20,7 +20,7 @@ PRs and issues are welcome — features, bug fixes, docs, and questions.
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) 24+
-- [VS Code](https://code.visualstudio.com/) 1.85+
+- [VS Code](https://code.visualstudio.com/) 1.125+
 - `npm`
 
 ## Setup

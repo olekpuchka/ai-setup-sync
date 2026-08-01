@@ -63,6 +63,16 @@ async function parallelLimit<T>(
   }
 }
 
+/** Stable fingerprint of the settings that decide which files are managed. */
+function managedSetKey(targetFolders: string[], pathMappings: Record<string, string>): string {
+  const folders = [...targetFolders].sort().join("\u0000");
+  const mappings = Object.entries(pathMappings)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([from, to]) => `${from}\u0001${to}`)
+    .join("\u0000");
+  return `${folders}\u0002${mappings}`;
+}
+
 interface SyncOptions {
   repoRef: RepoRef;
   targetFolders: string[];
@@ -106,11 +116,9 @@ function toLocalPath(repoPath: string, sortedMappings: [string, string][]): stri
 }
 
 /**
- * Translates a repo-relative file map (as stored in SyncState) into the
- * workspace-relative paths actually on disk, applying pathMappings. The registry
- * stores local paths, but `state.files` is keyed by repo path — callers that fall
- * back to `state.files` for cleanup must localize first, or they target the wrong
- * paths (and silently delete nothing) when pathMappings is set.
+ * Translates a repo-path-keyed file map into the workspace-relative paths on disk. The
+ * registry stores local paths but `state.files` is keyed by repo path, so callers falling
+ * back to `state.files` for cleanup must localize first or they delete nothing.
  */
 export function localizeStateFiles(
   files: Record<string, string>,
@@ -125,12 +133,11 @@ export function localizeStateFiles(
 }
 
 /**
- * The single "is this a safe workspace-relative path" invariant, shared by
- * validateRepoPath and validateLocalPath so both enforce exactly the same rules.
- * Returns a short reason when `p` is unsafe, or undefined when it's fine.
+ * The single "is this a safe workspace-relative path" invariant, shared by validateRepoPath
+ * and validateLocalPath so both enforce identical rules. Returns a reason if unsafe.
  *
- * A path is safe only if it is relative, uses `/` separators, has no control
- * characters, no traversal/degenerate segment, and never names the git directory.
+ * Safe means: relative, `/` separators, no control characters, no traversal or degenerate
+ * segment, and never names the git directory.
  */
 function unsafePathReason(p: string): string | undefined {
   // Whole-string checks first, so `!p` short-circuits before any `.split` (a null/undefined
@@ -151,20 +158,16 @@ function unsafePathReason(p: string): string | undefined {
     return "traversal or degenerate segment";
   }
   const segments = p.split("/");
-  // Traversal check. Windows strips trailing spaces from each component, so ".. " / ". "
-  // resolve to ".." / "." on disk — strip trailing spaces before comparing so they can't slip
-  // past. Do NOT strip trailing dots here: dots make a name longer, not a parent ref ("..."
-  // is an invalid empty name on Windows, a legal literal file on Linux/macOS — never
-  // traversal), so stripping them would wrongly reject legal all-dot filenames. An empty
-  // result means the segment was empty ("//") or only spaces/"."/"..".
+  // Traversal check. Windows strips trailing spaces, so ".. " resolves to ".." on disk —
+  // strip them before comparing. Do NOT strip trailing dots: they lengthen a name rather
+  // than making it a parent ref, so stripping would reject legal all-dot filenames.
   if (segments.some((seg) => { const t = seg.replace(/ +$/, ""); return t === "" || t === "." || t === ".."; })) {
     return "traversal or degenerate segment";
   }
-  // Never touch the git internals directory, at any depth. targetFolders/pathMappings are
-  // workspace-settable (window scope), so a malicious `.vscode/settings.json` could otherwise
-  // map a synced file onto `.git/hooks/pre-commit` (or a nested repo's) and get code execution
-  // on the next commit. Strip trailing dots AND spaces (full Windows normalization) so ".git."
-  // and ".git " resolve here too. Case-insensitive per Git's macOS/Windows behavior.
+  // Never touch the git directory, at any depth: targetFolders/pathMappings are
+  // workspace-settable, so a malicious `.vscode/settings.json` could otherwise map a synced
+  // file onto `.git/hooks/pre-commit` and get code execution on the next commit. Strips
+  // trailing dots and spaces (Windows normalization); case-insensitive per Git on mac/Windows.
   if (segments.some((seg) => seg.replace(/[ .]+$/, "").toLowerCase() === ".git")) {
     return "targets the git directory";
   }
@@ -175,7 +178,7 @@ function unsafePathReason(p: string): string | undefined {
  * Rejects local paths that could escape the workspace root after pathMappings
  * translation, or that would clobber git internals. Protects against a malicious
  * workspace `.vscode/settings.json` mapping a repo path to `../../etc/passwd` or
- * `.git/hooks/pre-commit` (SEC-1b).
+ * `.git/hooks/pre-commit`.
  */
 function validateLocalPath(p: string): void {
   const reason = unsafePathReason(p);
@@ -199,7 +202,7 @@ function isSyncable(path: string, targetFolders: string[], mappings: Record<stri
 /**
  * Rejects repo paths that could escape the workspace root or clobber git internals.
  * Paths from the GitHub tree API should never trip these (Git itself forbids `.git`
- * components and control chars), so treating them as errors is the right policy (SEC-1).
+ * components and control chars), so treating them as errors is the right policy.
  */
 function validateRepoPath(p: string): void {
   const reason = unsafePathReason(p);
@@ -208,13 +211,63 @@ function validateRepoPath(p: string): void {
   }
 }
 
-async function readIfExists(uri: vscode.Uri): Promise<Buffer | undefined> {
+/** Outcome of reading a file, keeping "not there" distinct from "there but unreadable". */
+type FileProbe =
+  | { kind: "missing" }
+  | { kind: "read"; content: Buffer }
+  | { kind: "unreadable"; reason: string };
+
+async function probeFile(uri: vscode.Uri): Promise<FileProbe> {
   try {
     const bytes = await vscode.workspace.fs.readFile(uri);
-    return Buffer.from(bytes);
-  } catch {
-    return undefined;
+    return { kind: "read", content: Buffer.from(bytes) };
+  } catch (err) {
+    if (err instanceof vscode.FileSystemError && err.code === "FileNotFound") {
+      return { kind: "missing" };
+    }
+    return { kind: "unreadable", reason: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * Collapses missing and unreadable to undefined. Only for callers that *skip* the work on
+ * undefined — recording an ack, deleting an orphan — where both mean "do nothing".
+ *
+ * Where content drives an overwrite, delete, or untrack, use probeFile or readMergeBase and
+ * handle "unreadable" explicitly, or a permission error reads as a deleted file.
+ */
+async function readIfExists(uri: vscode.Uri): Promise<Buffer | undefined> {
+  const probe = await probeFile(uri);
+  return probe.kind === "read" ? probe.content : undefined;
+}
+
+/** A probe reduced to its git blob SHA — see probeAll. */
+type HashedProbe =
+  | { kind: "missing" }
+  | { kind: "read"; sha: string }
+  | { kind: "unreadable"; reason: string };
+
+/**
+ * Probes every item's localPath concurrently, returning results zipped back in input
+ * order — callers depend on that order for conflict-prompt sequence and log output.
+ *
+ * Only the SHA is kept: holding each file's bytes would make peak memory the size of the
+ * whole synced tree, retained across the conflict prompts that follow.
+ */
+async function probeAll<T extends { localPath: string }>(
+  root: vscode.Uri,
+  items: readonly T[]
+): Promise<Array<[T, HashedProbe]>> {
+  const probes = new Array<HashedProbe>(items.length);
+  await parallelLimit(
+    items.map((item, i) => ({ item, i })),
+    DISK_CONCURRENCY,
+    async ({ item, i }) => {
+      const probe = await probeFile(vscode.Uri.joinPath(root, item.localPath));
+      probes[i] = probe.kind === "read" ? { kind: "read", sha: gitBlobSha(probe.content) } : probe;
+    }
+  );
+  return items.map((item, i) => [item, probes[i]]);
 }
 
 type Classification = "new" | "safe-update" | "conflict" | "acknowledged" | "up-to-date";
@@ -242,14 +295,23 @@ export async function syncFolder(
   const sortedMappings: [string, string][] = Object.entries(pathMappings).sort((a, b) => b[0].length - a[0].length);
   const state = getState(context, workspaceFolder);
 
-  const tree = await getTree(repoRef, state.treeEtag);
+  // A changed managed set invalidates the cached ETag: the 304 path only revisits files already
+  // in state, so it can neither fetch newly-included paths nor clean up newly-excluded ones.
+  // The in-session settings listener also clears the ETag, but it cannot see an edit made while
+  // VS Code was closed — this check covers that.
+  const currentManagedSetKey = managedSetKey(targetFolders, pathMappings);
+  const managedSetChanged = state.managedSetKey !== currentManagedSetKey;
+  if (managedSetChanged && state.treeEtag) {
+    log(`${workspaceFolder.name}: synced paths changed since the last sync — doing a full refresh.`);
+  }
+
+  const tree = await getTree(repoRef, managedSetChanged ? undefined : state.treeEtag);
 
   // Cheap short-circuit: a 304 means the repo tree is byte-identical to the last
   // sync (and the request didn't count against the GitHub rate limit). The repo
   // is unchanged — but a file may have been deleted locally (restore it) or
   // edited locally without the repo changing (prompt the user).
   if (tree.notModified) {
-    // One pass: detect missing and locally-modified files simultaneously (OPT-1).
     const missing: { repoPath: string; localPath: string }[] = [];
     const locallyModified: PlannedFile[] = [];
     const acknowledgedLocalPaths = new Set<string>();
@@ -265,7 +327,12 @@ export async function syncFolder(
         return aMap === bMap ? 0 : aMap ? -1 : 1;
       }
     );
+    // Pass 1 (no I/O): pick the winning state entry per local path. Order-sensitive —
+    // state.files can transiently map two repo paths to one local path, and the
+    // mapping-priority sort above decides which wins. Deduping here also keeps us from
+    // issuing concurrent writes to the same file.
     const seenLocalPaths304 = new Set<string>();
+    const candidates304: { repoPath: string; localPath: string; lastSyncedSha: string }[] = [];
     for (const [repoPath, lastSyncedSha] of sortedStateEntries) {
       if (!isSyncable(repoPath, targetFolders, pathMappings)) {
         continue;
@@ -273,20 +340,28 @@ export async function syncFolder(
       syncableCount++;
       const localPath = toLocalPath(repoPath, sortedMappings);
       validateLocalPath(localPath);
-      // state.files may transiently have two repo paths mapping to the same local path
-      // (before a full-tree sync cleans them up). Skip duplicates so we don't issue
-      // concurrent writes to the same file or store a stale SHA in the registry.
       if (seenLocalPaths304.has(localPath)) {
         continue;
       }
       seenLocalPaths304.add(localPath);
-      const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, localPath);
-      const onDisk = await readIfExists(fileUri);
-      if (!onDisk) {
+      candidates304.push({ repoPath, localPath, lastSyncedSha });
+    }
+
+    // Pass 2 (parallel I/O): compare against disk.
+    for (const [{ repoPath, localPath, lastSyncedSha }, probe] of await probeAll(
+      workspaceFolder.uri,
+      candidates304
+    )) {
+      if (probe.kind === "unreadable") {
+        // Restoring or overwriting would clobber content we couldn't inspect.
+        log(`Warning: skipping ${localPath} — could not read it to compare (${probe.reason}).`);
+        continue;
+      }
+      if (probe.kind === "missing") {
         missing.push({ repoPath, localPath });
         continue;
       }
-      const localSha = gitBlobSha(onDisk);
+      const localSha = probe.sha;
       if (localSha !== lastSyncedSha) {
         if (readAck(state.acknowledged, repoPath)?.localSha !== localSha) {
           // entry.sha == lastSyncedSha because the repo hasn't changed (304).
@@ -327,7 +402,7 @@ export async function syncFolder(
         const modifiedLocalPaths304 = new Set([...locallyModified.map((p) => p.localPath), ...acknowledgedLocalPaths]);
         const excludePaths304 = managedPaths.filter((lp) => !modifiedLocalPaths304.has(lp));
         setWorkspaceFiles(workspaceFolder.uri.fsPath, localFiles);
-        await applyGitExclude(workspaceFolder, excludePaths304.length > 0 ? [...excludePaths304, ".worktreeinclude"] : excludePaths304);
+        await applyGitExclude(workspaceFolder, excludePaths304, managedPaths.length > 0);
         await applyWorktreeInclude(workspaceFolder, managedPaths, targetFolders, pathMappings);
       } catch (err) {
         log(`Warning: failed to update registry/gitignore after restore: ${err instanceof Error ? err.message : String(err)}`);
@@ -398,7 +473,7 @@ export async function syncFolder(
           if (!seen304.has(lp)) { seen304.add(lp); allLocalPaths.push(lp); }
         }
         const excludeAfter304 = allLocalPaths.filter((lp) => !keptLocalPaths.has(lp));
-        await applyGitExclude(workspaceFolder, excludeAfter304.length > 0 ? [...excludeAfter304, ".worktreeinclude"] : excludeAfter304);
+        await applyGitExclude(workspaceFolder, excludeAfter304, allLocalPaths.length > 0);
       } catch (err) {
         log(`Warning: failed to update git exclude after 304 conflict resolution: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -436,22 +511,14 @@ export async function syncFolder(
 
   const entries = tree.entries.filter((e) => isSyncable(e.path, targetFolders, pathMappings));
 
-  // Validate all paths before any file I/O (SEC-1).
+  // Validate all paths before any file I/O.
   for (const entry of entries) {
     validateRepoPath(entry.path);
   }
 
-  // Classify each remote file against what's on disk + what we last synced.
-  // When two repo paths translate to the same local path (e.g. root .github/ and
-  // projectA/.github/ both targeting .github/), the pathMapping-sourced entry wins
-  // over the targetFolder-sourced one. Between same-priority entries the first wins
-  // (GitHub tree order is stable), so the result is always deterministic.
-  // Repo paths that lose the dedup are collected so their stale state entries can be
-  // pruned from newState.files — otherwise they accumulate and corrupt the registry.
-  // Priority-aware local-path → sha lookup from prior state. Used as a fallback when the
-  // current winner's repo path was never previously tracked (mapping change). Two passes
-  // mirror the plannedMap priority: mapping entries win over targetFolder entries, with
-  // first-in-insertion-order as the tiebreaker within each tier.
+  // Local path → last-synced sha, used as a fallback when the winner's repo path was never
+  // tracked before (a mapping change). Two passes mirror the winner priority below: mapping
+  // entries beat targetFolder entries, insertion order breaks ties within a tier.
   const stateByLocalPath = new Map<string, string>();
   for (const [rp, sha] of Object.entries(state.files)) {
     const lp = toLocalPath(rp, sortedMappings);
@@ -466,16 +533,21 @@ export async function syncFolder(
     }
   }
 
-  const plannedMap = new Map<string, PlannedFile>();
   const skippedRepoPaths = new Set<string>();
   // Maps each loser repo path to the local path it shares with the winner, so we can
   // conditionally prune it only after confirming the winner was successfully written.
   const skippedToLocalPath = new Map<string, string>();
+
+  // Pass 1 (no I/O): pick the winning repo entry per local path. Two repo paths can map to
+  // one local path (root .github/ and projectA/.github/ both targeting .github/); the
+  // pathMapping-sourced entry wins, else the first. Sequential on purpose — that
+  // first-wins tiebreaker is only deterministic in GitHub's stable tree order.
+  const winners = new Map<string, { entry: TreeEntry; localPath: string; fromMapping: boolean }>();
   for (const entry of entries) {
     const localPath = toLocalPath(entry.path, sortedMappings);
     validateLocalPath(localPath);
     const fromMapping = isMatchedByMapping(entry.path, sortedMappings);
-    const existing = plannedMap.get(localPath);
+    const existing = winners.get(localPath);
     if (existing && (existing.fromMapping || !fromMapping)) {
       skippedRepoPaths.add(entry.path);
       skippedToLocalPath.set(entry.path, localPath);
@@ -486,13 +558,31 @@ export async function syncFolder(
       skippedRepoPaths.add(existing.entry.path);
       skippedToLocalPath.set(existing.entry.path, localPath);
     }
-    const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, localPath);
-    const onDisk = await readIfExists(fileUri);
-    if (!onDisk) {
+    winners.set(localPath, { entry, localPath, fromMapping });
+  }
+
+  // Pass 2 (parallel I/O): read each winner to classify it.
+  const plannedMap = new Map<string, PlannedFile>();
+  // Excluded from planning and from the loser-prune pass below, so a file we never
+  // inspected is neither overwritten nor untracked. Repo paths are tracked alongside so the
+  // entry keeps its acknowledgement and the tree ETag isn't cached over the pending update.
+  const unreadableLocalPaths = new Set<string>();
+  const unreadableRepoPaths: string[] = [];
+  for (const [{ entry, localPath, fromMapping }, probe] of await probeAll(
+    workspaceFolder.uri,
+    [...winners.values()]
+  )) {
+    if (probe.kind === "unreadable") {
+      unreadableLocalPaths.add(localPath);
+      unreadableRepoPaths.push(entry.path);
+      log(`Warning: skipping ${localPath} — could not read it to compare (${probe.reason}).`);
+      continue;
+    }
+    if (probe.kind === "missing") {
       plannedMap.set(localPath, { entry, localPath, classification: "new", fromMapping });
       continue;
     }
-    const localSha = gitBlobSha(onDisk);
+    const localSha = probe.sha;
     if (localSha === entry.sha) {
       plannedMap.set(localPath, { entry, localPath, classification: "up-to-date", fromMapping });
       continue;
@@ -568,8 +658,19 @@ export async function syncFolder(
     ref: repoRef.ref,
     repoUrl: repoRef.url,
     treeEtag: tree.etag,
+    managedSetKey: currentManagedSetKey,
     files: { ...state.files },
   };
+  // Skipped-as-unreadable entries never reach that loop, so carry their acknowledgement here
+  // or the user is re-prompted for a "Keep mine" decision they already made.
+  for (const repoPath of unreadableRepoPaths) {
+    const ack = readAck(state.acknowledged, repoPath);
+    if (ack) {
+      newState.acknowledged ??= {};
+      newState.acknowledged[repoPath] = ack;
+    }
+  }
+
   const fileLog: string[] = [];
   const toWrite: PlannedFile[] = [];
   for (const p of planned) {
@@ -601,7 +702,7 @@ export async function syncFolder(
     }
   }
 
-  // Write files; save state even on partial failure so progress is not lost (BUG-4).
+  // Write files; save state even on partial failure so progress is not lost.
   let syncError: unknown;
   try {
     let writeProgress = 0;
@@ -612,7 +713,7 @@ export async function syncFolder(
       await vscode.workspace.fs.createDirectory(parentUri);
       await vscode.workspace.fs.writeFile(fileUri, bytes);
       options.onProgress?.(++writeProgress, toWrite.length);
-      // OPT-2: the tree API already returns the blob SHA — no need to recompute it.
+      // The tree API already returned the blob SHA, so don't recompute it.
       newState.files[p.entry.path] = p.entry.sha;
       if (p.classification === "new") {
         result.added++;
@@ -630,6 +731,11 @@ export async function syncFolder(
   // If the winner's download failed, leave the loser in state so the next sync retries
   // rather than zeroing tracking for that local path entirely.
   for (const [loserPath, localPath] of skippedToLocalPath) {
+    // Winner was unreadable, so never planned or written. Dropping the loser would zero
+    // tracking for a file we never inspected.
+    if (unreadableLocalPaths.has(localPath)) {
+      continue;
+    }
     const winner = plannedMap.get(localPath);
     if (!winner || newState.files[winner.entry.path] === winner.entry.sha) {
       delete newState.files[loserPath];
@@ -640,6 +746,10 @@ export async function syncFolder(
   // path mapping settings. Unmodified files are deleted silently; locally-edited ones are
   // prompted before deletion.
   let deleteWasDismissed = false;
+  // Set whenever a queued removal did not complete — unreadable, or the delete itself failed.
+  // Must suppress the ETag: the 304 path performs no deletions, so a cached ETag would strand
+  // the removal until the repo tree changed for some unrelated reason.
+  let removalIncomplete = false;
   const allRemovedPaths = [...removedInRepo, ...excludedBySettings];
   if (allRemovedPaths.length > 0) {
     type RemovedEntry = { repoPath: string; localPath: string };
@@ -650,19 +760,31 @@ export async function syncFolder(
       const localPath = toLocalPath(repoPath, sortedMappings);
       validateLocalPath(localPath);
       const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, localPath);
-      const onDisk = await readIfExists(fileUri);
-      if (!onDisk) {
+      const probe = await probeFile(fileUri);
+      if (probe.kind === "unreadable") {
+        // Treating this as "already gone" would drop tracking for a file that still
+        // exists, orphaning it. Keep it; the next sync retries.
+        removalIncomplete = true;
+        log(`Warning: keeping ${localPath} — could not read it to decide removal (${probe.reason}).`);
+        return;
+      }
+      if (probe.kind === "missing") {
         // Already gone — just drop from state, nothing to delete.
         delete newState.files[repoPath];
         return;
       }
-      const localSha = gitBlobSha(onDisk);
+      const localSha = gitBlobSha(probe.content);
       if (localSha === state.files[repoPath]) {
         safeToDelete.push({ repoPath, localPath });
       } else {
         editedAndRemoved.push({ repoPath, localPath });
       }
     });
+
+    // Filled by concurrent workers, so order reflects I/O timing. Sort for stable prompt
+    // order and reproducible logs.
+    safeToDelete.sort((a, b) => a.localPath.localeCompare(b.localPath));
+    editedAndRemoved.sort((a, b) => a.localPath.localeCompare(b.localPath));
 
     const editedLocalPaths = editedAndRemoved.map(({ localPath }) => localPath);
     const deleteResolution = await resolveDeleteConflicts(editedLocalPaths);
@@ -679,6 +801,7 @@ export async function syncFolder(
         delete newState.files[repoPath];
         deletedLocalPaths.push(localPath);
       } catch (err) {
+        removalIncomplete = true;
         log(`Warning: could not delete ${localPath}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
@@ -693,6 +816,7 @@ export async function syncFolder(
           delete newState.files[repoPath];
           deletedLocalPaths.push(localPath);
         } catch (err) {
+          removalIncomplete = true;
           log(`Warning: could not delete ${localPath}: ${err instanceof Error ? err.message : String(err)}`);
         }
       } else {
@@ -710,23 +834,21 @@ export async function syncFolder(
     await pruneEmptyParentDirs(deletedLocalPaths, workspaceFolder.uri, fileLog);
   }
 
-  // Don't cache the tree ETag when the sync didn't fully complete, or the next
-  // sync gets a 304 and takes the short-circuit path — which only revisits files
-  // already in state — so files that failed to download are never retried:
-  //  - a dismissed conflict prompt (Escape/X) must re-fetch and re-offer the dialog;
-  //  - a download failure (e.g. rate-limit 403s) must re-fetch and retry the misses.
-  // Note: acknowledged entries are preserved inline during the main loop above
-  // (the "acknowledged" classification) — no separate carry-over step needed.
-  if (wasDismissed || deleteWasDismissed || syncError) {
+  // Don't cache the ETag unless the sync fully completed: the 304 path only revisits files
+  // already in state, so a dismissed conflict prompt would never be re-offered, a failed
+  // download would never be retried, and a file we couldn't read would keep its stale sha —
+  // making the 304 path judge it up-to-date and silently strand the upstream update.
+  if (
+    wasDismissed ||
+    deleteWasDismissed ||
+    syncError ||
+    unreadableLocalPaths.size > 0 ||
+    removalIncomplete
+  ) {
     newState.treeEtag = undefined;
   }
 
   await saveState(context, workspaceFolder, newState);
-
-  if (fileLog.length > 0) {
-    log(summarize(workspaceFolder.name, result).replace(/\.$/, ":"));
-    fileLog.forEach((line) => log(line));
-  }
 
   // Record what we manage so the uninstall hook can clean it up later.
   // Use local paths (what's on disk) for the registry and git exclude.
@@ -781,6 +903,13 @@ export async function syncFolder(
     await pruneEmptyParentDirs(orphanDeletedPaths, workspaceFolder.uri, fileLog);
   }
 
+  // Logged only now: the orphan pass above also appends to fileLog and bumps result.deleted,
+  // so logging earlier named fewer files than the summary toast counted.
+  if (fileLog.length > 0) {
+    log(summarize(workspaceFolder.name, result).replace(/\.$/, ":"));
+    fileLog.forEach((line) => log(line));
+  }
+
   try {
     const managedPaths = Object.keys(localFiles);
     // Locally-modified files are removed from the exclude block so they surface in git
@@ -794,7 +923,7 @@ export async function syncFolder(
     if (!syncError) {
       setWorkspaceFiles(workspaceFolder.uri.fsPath, localFiles);
     }
-    await applyGitExclude(workspaceFolder, excludePaths.length > 0 ? [...excludePaths, ".worktreeinclude"] : excludePaths);
+    await applyGitExclude(workspaceFolder, excludePaths, managedPaths.length > 0);
     await applyWorktreeInclude(workspaceFolder, managedPaths, targetFolders, pathMappings);
   } catch (err) {
     log(`Warning: failed to update registry/gitignore: ${err instanceof Error ? err.message : String(err)}`);
@@ -813,29 +942,57 @@ export async function syncFolder(
 }
 
 /**
+ * Existing content of a file we read-modify-write, or undefined if it can't be read — which
+ * it logs, so callers only need to bail. An unreadable file must not be treated as empty:
+ * these hold the user's own rules, and rewriting from an empty base would discard them.
+ */
+async function readMergeBase(uri: vscode.Uri, label: string): Promise<string | undefined> {
+  const probe = await probeFile(uri);
+  if (probe.kind === "unreadable") {
+    log(`Warning: ${label} exists but could not be read — leaving it untouched.`);
+    return undefined;
+  }
+  return probe.kind === "read" ? probe.content.toString("utf8") : "";
+}
+
+/** True when the folder is a plain git repo (a `.git` directory, not a worktree file). */
+async function isPlainGitRepo(workspaceFolder: vscode.WorkspaceFolder): Promise<boolean> {
+  try {
+    const stat = await vscode.workspace.fs.stat(vscode.Uri.joinPath(workspaceFolder.uri, ".git"));
+    return Boolean(stat.type & vscode.FileType.Directory);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Inserts/updates (or removes) the managed ignore block in the repo's LOCAL
  * exclude file (`.git/info/exclude`). Using the local exclude rather than a
  * tracked `.gitignore` means the rules never show up as a change to commit.
  * No-ops if the workspace is not a plain git repository.
+ *
+ * `.worktreeinclude` is appended here rather than by callers, so the file we write can't show
+ * up as an untracked change because one caller forgot it. It is keyed on `anyManaged`, not on
+ * `excludePaths`: locally-modified files are deliberately left out of the exclude block, so a
+ * project whose every managed file is modified still has a `.worktreeinclude` to hide.
  */
 export async function applyGitExclude(
   workspaceFolder: vscode.WorkspaceFolder,
-  managedPaths: string[]
+  excludePaths: string[],
+  anyManaged: boolean
 ): Promise<void> {
-  const gitDir = vscode.Uri.joinPath(workspaceFolder.uri, ".git");
-  try {
-    const stat = await vscode.workspace.fs.stat(gitDir);
-    // Only the standard ".git directory" layout has .git/info/exclude.
-    if (!(stat.type & vscode.FileType.Directory)) {
-      return;
-    }
-  } catch {
-    return; // not a git repo
+  const managedPaths = anyManaged ? [...excludePaths, ".worktreeinclude"] : [];
+  // Only the standard ".git directory" layout has .git/info/exclude.
+  if (!(await isPlainGitRepo(workspaceFolder))) {
+    return;
   }
 
-  const infoDir = vscode.Uri.joinPath(gitDir, "info");
+  const infoDir = vscode.Uri.joinPath(workspaceFolder.uri, ".git", "info");
   const excludeUri = vscode.Uri.joinPath(infoDir, "exclude");
-  const existing = (await readIfExists(excludeUri))?.toString("utf8") ?? "";
+  const existing = await readMergeBase(excludeUri, ".git/info/exclude");
+  if (existing === undefined) {
+    return;
+  }
 
   // No managed files — strip our block entirely rather than writing an empty one.
   // upsertBlock([]) would leave a markers-only block behind, which lingers forever
@@ -863,8 +1020,8 @@ export async function applyGitExclude(
  * files are available in isolated worktree sessions. No-ops if the workspace is
  * not a plain git repository.
  *
- * `.worktreeinclude` itself is added to `.git/info/exclude` by the caller so it
- * never shows up as an untracked change.
+ * `applyGitExclude` adds `.worktreeinclude` to the exclude list, so it never shows up
+ * as an untracked change.
  */
 async function applyWorktreeInclude(
   workspaceFolder: vscode.WorkspaceFolder,
@@ -872,18 +1029,15 @@ async function applyWorktreeInclude(
   targetFolders: string[],
   pathMappings: Record<string, string>
 ): Promise<void> {
-  const gitDir = vscode.Uri.joinPath(workspaceFolder.uri, ".git");
-  try {
-    const stat = await vscode.workspace.fs.stat(gitDir);
-    if (!(stat.type & vscode.FileType.Directory)) {
-      return;
-    }
-  } catch {
-    return; // not a git repo
+  if (!(await isPlainGitRepo(workspaceFolder))) {
+    return;
   }
 
   const includeUri = vscode.Uri.joinPath(workspaceFolder.uri, ".worktreeinclude");
-  const existing = (await readIfExists(includeUri))?.toString("utf8") ?? "";
+  const existing = await readMergeBase(includeUri, ".worktreeinclude");
+  if (existing === undefined) {
+    return;
+  }
 
   if (managedPaths.length === 0) {
     // No managed files — strip our block; delete the file if nothing else remains.

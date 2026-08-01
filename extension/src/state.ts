@@ -14,6 +14,12 @@ export interface SyncState {
   /** repo-relative path -> git blob SHA we last wrote to disk */
   files: Record<string, string>;
   /**
+   * Fingerprint of the targetFolders/pathMappings that produced `files`. A mismatch means the
+   * managed set changed since the last sync — including while VS Code was closed, which the
+   * in-session settings listener can't see — so the cached ETag must be ignored.
+   */
+  managedSetKey?: string;
+  /**
    * Paths the user said "Keep mine" on. Stored as { localSha, repoSha } so we
    * can suppress re-prompts even across full-tree syncs, as long as neither the local
    * file nor the upstream file has changed since the user's decision.
