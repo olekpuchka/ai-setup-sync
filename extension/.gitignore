@@ -1,6 +1,8 @@
 node_modules/
 dist/
 *.vsix
-# Generated at build time from the root CHANGELOG.md (see the "package" script);
-# the root file is canonical. Not tracked here to avoid a committed copy drifting.
+# Generated at build time from the root CHANGELOG.md and LICENSE (see the "package"
+# script); the root files are canonical. Not tracked here to avoid committed copies
+# drifting. vsce packages only this folder, so both must exist inside it to ship.
 CHANGELOG.md
+LICENSE.md

@@ -4,6 +4,21 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.8.3] — 2026-08-02
+
+### Fixed
+
+- **Marketplace links to the path-mappings section no longer 404** — the heading contained an `&`, which GitHub and the Marketplace slugify differently (`path-mappings--multi-project-repos` vs `path-mappings-multi-project-repos`), so every link to the largest reference section was dead on the Marketplace. Renamed to remove the divergent character.
+- **Corrected documentation that didn't match the extension** — the "files kept" toast offers **Show Log**, not "Show details"; the focus-sync throttle is 10 minutes rather than an unspecified interval; **Remove Synced Files** confirms before running; and **Run Post Sync Command** is always in the command palette, only conditionally in the status-bar menu.
+- **Corrected the repository requirements** — the docs said the sync repo had to be one "you own" and implied it had to be private. Any readable repository works: personal or org, public or private, including SAML SSO orgs and Enterprise Server.
+
+### Changed
+
+- **README rewritten around installing, not reading** — the pitch and feature list now come before the table of contents instead of after it, the feature list is condensed from twelve bullets to seven, and reference material is indexed behind a Contents block. Adds a Support section and documents multi-root workspace behavior.
+- **`LICENSE.md` is generated at build time** from the root `LICENSE`, matching how `CHANGELOG.md` already worked, so the two copies can't drift.
+
+---
+
 ## [1.8.0] — 2026-08-01
 
 ### Breaking

@@ -9,26 +9,59 @@
   [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 </div>
 
-Every AI coding tool needs its own config files in every repo. AI Setup Sync syncs your AI setup
-files and MCP configs (Claude Code, Copilot, Cursor, Codex, Antigravity and more) from a GitHub repo
-into every project automatically. No copy-pasting.
+Every AI coding tool wants its own config files in every repo. AI Setup Sync keeps one GitHub repo
+as the source of truth and pulls them into each project automatically — agents, skills, commands,
+MCP configs, and anything else your tools read. No copy-pasting, and nothing committed to the
+project you're working in.
 
-> 📖 For installation, settings, path mappings, conflict handling, and the FAQ, see **[extension/README.md](extension/README.md)**.
+## Why AI Setup Sync
 
-## What it does
+- **Your AI setup never touches a client's codebase** — agents, skills, commands, MCP configs,
+  whatever your tools read: it all stays in your own setup repo, and every file synced from it is
+  excluded from git in the projects it lands in.
+- **Works with any file-based AI config** — Claude Code, Copilot, Cursor, Codex, and Antigravity
+  work out of the box, MCP configs included. Custom path mappings cover anything else.
+- **Never loses your work** — files you've edited locally are detected and you're prompted, with a
+  built-in diff, before anything is replaced.
+- **Stays out of your way** — syncs on project open and window focus, reports state in the status
+  bar, and reaches every Claude Code and Codex worktree so parallel agent sessions get your setup
+  too.
 
-- **Syncs automatically** — pulls from your GitHub repo on project open and window focus.
-- **Protects your Intellectual Property** — your AI setup lives in your own private repository, syncs automatically into each project, and is excluded from git. Your instructions never touch a client's codebase.
-- **Supports every tool** — any file-based AI config works out of the box (Claude Code, Copilot, Cursor, and more). Custom path mappings cover anything else.
-- **Protects local edits** — detects files you've changed and prompts before overwriting, with a built-in diff.
-- **Stays out of git** — synced files are added to `.git/info/exclude` so they don't clutter your changes. If you edit one locally, it surfaces in Source Control automatically so you can see the diff.
-- **Works across parallel agent sessions** — synced configs are automatically available in every Claude Code and Codex worktree, so AI tools have your setup no matter which isolated session they run in.
-- **Stays out of your way** — a status-bar item shows sync state and opens a quick action menu; larger syncs show a live progress notification, and routine background syncs stay silent.
-- **Runs your build step** — an optional post-sync command turns synced templates into finished configs, only in trusted workspaces.
+## Requirements
 
-## How it works
+- **VS Code 1.125** or later.
+- **A GitHub repository** holding your AI setup files — personal or org, public or private,
+  including SAML SSO orgs and GitHub Enterprise Server.
+- **For private, SSO-protected, or Enterprise Server repos:** a GitHub **classic** personal access
+  token with the **`repo`** scope.
 
-Sync triggers automatically on startup, window focus, and settings changes. Push to your config repo and every project picks up the change on the next sync — here's how the pieces connect:
+## Install
+
+1. Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=olekpuchka.ai-setup-sync)
+   (or search **AI Setup Sync** in the Extensions view).
+2. Set `aiSetupSync.repository` to your GitHub repository URL in VS Code **user** settings.
+3. Open a project — sync runs automatically.
+
+For private repos, SSO-protected orgs, or GitHub Enterprise Server, add a token — see the
+[full setup guide](extension/README.md#setting-up-your-repository).
+
+> **New here?** Open a project before configuring anything and AI Setup Sync prompts you, with a
+> shortcut to the repository setting.
+
+## Documentation
+
+- **[Full guide](extension/README.md)** — settings, path mappings, conflict handling, post-sync
+  commands, and the FAQ.
+- **[Changelog](CHANGELOG.md)** — what changed in each release.
+- **[Issues](https://github.com/olekpuchka/ai-setup-sync/issues)** — bug reports, questions, and
+  feature requests.
+
+## Architecture
+
+Sync triggers on startup, window focus, and settings changes. The extension core throttles those
+triggers and hands off to the sync engine, which fetches the repo tree from the GitHub API — using
+an ETag so unchanged trees cost nothing — writes the files it needs to your project, and records
+what it wrote so the next sync can tell your edits from its own.
 
 ```mermaid
 flowchart LR
@@ -51,12 +84,6 @@ flowchart LR
     · Rate limit handling
     · Registers commands"]:::core -->|dispatches| C
 
-    D[("GITHUB API
-    · Repo tree (ETag cached)
-    · Raw file content
-    · PAT auth (keychain)
-    · 304 Not Modified")]:::github -->|provides files| C
-
     C{{"SYNC ENGINE
     · Parallel downloads & deletions
     · Conflict detection
@@ -64,6 +91,12 @@ flowchart LR
     · Path mapping rules"}}:::sync -->|writes| E
 
     C -->|saves state| F
+
+    D[("GITHUB API
+    · Repo tree (ETag cached)
+    · Raw file content
+    · PAT auth (keychain)
+    · 304 Not Modified")]:::github -->|provides files| C
 
     E["LOCAL FILES
     · .claude, .github and more
@@ -75,22 +108,12 @@ flowchart LR
 
     linkStyle 0 stroke:#8B5CF6,stroke-width:2px
     linkStyle 1 stroke:#58A6FF,stroke-width:2px
-    linkStyle 2 stroke:#3FB950,stroke-width:2px
+    linkStyle 2 stroke:#F97316,stroke-width:2px
     linkStyle 3 stroke:#F97316,stroke-width:2px
-    linkStyle 4 stroke:#F97316,stroke-width:2px
+    linkStyle 4 stroke:#3FB950,stroke-width:2px
 ```
 
-## Install
-
-1. Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=olekpuchka.ai-setup-sync)
-   (or search **AI Setup Sync** in the Extensions view).
-2. Set `aiSetupSync.repository` to your GitHub repository URL in VS Code **user** settings.
-3. Open a project — sync runs automatically.
-
-For private repos, SSO-protected orgs, or GitHub Enterprise Server, add a token — see the
-[full setup guide](extension/README.md#setting-up-your-repository).
-
-> **New here?** Open a project before configuring anything and AI Setup Sync prompts you, with a shortcut to the repository setting.
+[CONTRIBUTING.md](CONTRIBUTING.md#key-concepts) covers how each piece is implemented.
 
 ## Contributing
 
@@ -99,4 +122,4 @@ Pull requests are welcome for features, bug fixes, and documentation. See
 
 ## License
 
-Released under the [MIT License](LICENSE) — free to use, modify, and distribute.
+Released under the [MIT License](LICENSE).

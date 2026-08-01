@@ -12,6 +12,8 @@ PRs and issues are welcome — features, bug fixes, docs, and questions.
 - [Running the extension locally](#running-the-extension-locally)
 - [Project structure](#project-structure)
 - [Key concepts](#key-concepts)
+- [Testing your changes](#testing-your-changes)
+- [Reporting bugs](#reporting-bugs)
 - [Building a .vsix](#building-a-vsix)
 - [Code style](#code-style)
 - [Submitting a pull request](#submitting-a-pull-request)
@@ -46,21 +48,30 @@ on save) and a reload of the dev host (**Ctrl+R** / **Cmd+R** in the dev host wi
 ```
 extension/
 ├── src/
-│   ├── extension.ts      — activation, commands, status bar + action menu, sync triggers (startup/focus/settings), post-sync command
-│   ├── sync.ts           — core sync logic: diff, conflict resolution, write
+│   ├── extension.ts      — activation, command registration, action menu, sync triggers (startup/focus/settings)
+│   ├── sync.ts           — core sync logic: diff, conflict resolution, write, deletion
+│   ├── syncLock.ts       — single lock shared by syncs and post-sync commands
+│   ├── settings.ts       — typed reader for the aiSetupSync.* configuration
 │   ├── github.ts         — GitHub API: tree, file fetch, rate-limit/SSO/Enterprise Server handling
 │   ├── token.ts          — SecretStorage helpers for the GitHub PAT
 │   ├── state.ts          — per-workspace persisted SHA map (globalState)
 │   ├── registry.ts       — cross-workspace file registry (for uninstall hook)
+│   ├── statusBar.ts      — status-bar item state, including post-sync failure tracking
+│   ├── postSync.ts       — post-sync command execution, trust + approval prompts
+│   ├── watcher.ts        — watches managed files, un-excludes them from git when edited
 │   ├── cleanup.ts        — file removal logic (shared with the uninstall script)
 │   ├── blobSha.ts        — git blob SHA computation (mirrors GitHub's hashing)
 │   ├── gitignore.ts      — .git/info/exclude management
 │   ├── remoteContent.ts  — virtual document provider for diff editor
 │   ├── output.ts         — Output channel wrapper
 │   └── uninstall.ts      — vscode:uninstall hook (plain Node, no VS Code API)
+├── media/                — extension icon and README assets
 ├── package.json          — manifest, contributes, settings, commands
 └── tsconfig.json
 ```
+
+The high-level flow these modules implement is diagrammed in the
+[README](README.md#architecture) — update it if you change how the pieces connect.
 
 ## Key concepts
 
@@ -87,6 +98,42 @@ is always keyed by the repo path; disk I/O uses the mapped local path. Both the 
 (`validateRepoPath`) and the mapped local path (`validateLocalPath`) are checked for traversal
 sequences before any file I/O — this prevents a malicious workspace `.vscode/settings.json` from
 writing files outside the workspace root.
+
+**Sync lock** — a sync and a post-sync command both write to the workspace, and a command that
+regenerates configs must not race a sync writing the files it reads. Both take the same lock
+(`syncLock.ts`) rather than each keeping its own flag; callers check `isSyncing()` and bail with
+their own message.
+
+**Git exclude and the watcher** — synced files are listed in a managed block in
+`.git/info/exclude`, so they don't appear as pending changes. `watcher.ts` watches those paths and
+drops a file from the block as soon as its content diverges from what was last synced, which makes
+the edit visible in Source Control without any manual step. Watch globs deliberately over-match —
+the handler filters — because under-matching would leave a locally edited file hidden from git.
+
+## Testing your changes
+
+There is no automated test suite; changes are verified by hand in the Extension Development Host.
+For anything touching sync, walk the paths that are easy to break:
+
+- **First sync** into a project with no config, and a **no-op sync** right after (should be silent).
+- **Local edit** to a synced file — it appears in Source Control, and the next sync prompts with a
+  working *Show diff*.
+- **Deletion** — remove a file from the repo, or toggle a `targetFolders` entry off, and confirm it
+  is removed locally and empty directories are cleaned up.
+- **Remove Synced Files** — locally edited files survive, the `.git/info/exclude` block and
+  `.worktreeinclude` are gone.
+
+The **AI Setup Sync** output channel logs every decision and is the fastest way to see what the
+sync engine thought it was doing.
+
+## Reporting bugs
+
+Open an [issue](https://github.com/olekpuchka/ai-setup-sync/issues) with:
+
+- Extension version, VS Code version, and OS.
+- What you expected versus what happened.
+- The relevant output from the **AI Setup Sync** channel (Output panel → dropdown). Scrub
+  repository URLs or paths you'd rather not share — tokens are never logged.
 
 ## Building a .vsix
 

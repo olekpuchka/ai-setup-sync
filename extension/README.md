@@ -7,33 +7,12 @@
 
 **One repo. Every project. Always in sync.**
 
-Every AI coding tool needs its own config files in every repo. AI Setup Sync syncs your AI setup
-files and MCP configs (Claude Code, Copilot, Cursor, Codex, Antigravity and more) from a GitHub repo
-into every project automatically. No copy-pasting.
+Every AI coding tool needs its own config files in every repo. AI Setup Sync keeps one GitHub repo
+as the source of truth and pulls them into every project automatically: agents, skills, commands,
+MCP configs, and anything else your tools read.
 
-Treat your AI setup like shared code: change it in one place, and it propagates everywhere.
-
----
-
-## Contents
-
-- [How it works](#how-it-works)
-- [Features](#features)
-- [Requirements](#requirements)
-- [Quick start](#quick-start)
-- [Setting up your repository](#setting-up-your-repository)
-- [Default synced paths](#default-synced-paths)
-- [Settings](#settings)
-- [Path mappings & multi-project repos](#path-mappings--multi-project-repos)
-- [Post-sync command](#post-sync-command)
-- [Conflict handling](#conflict-handling)
-- [Status bar](#status-bar)
-- [Commands](#commands)
-- [How files stay out of git](#how-files-stay-out-of-git)
-- [Removing synced files](#removing-synced-files)
-- [FAQ](#faq)
-
----
+Claude Code, GitHub Copilot, Cursor, Codex, Antigravity — and anything else that reads config from
+your project. No copy-pasting.
 
 ## How it works
 
@@ -44,28 +23,20 @@ pulls the latest files into each project on open and window focus.
 Sync flows one way: **repo → projects**. You can still edit files locally — the extension detects
 those edits and lets you choose what to keep, so no work is ever silently overwritten.
 
-> **Before you start** — you'll need a GitHub repository containing your shared AI setup files.
-> See [Setting up your repository](#setting-up-your-repository).
-
 ## Features
 
+- **Your AI setup never touches a client's codebase** — agents, skills, commands, MCP configs, and anything else your tools read stay in your own setup repository. Synced files are added to `.git/info/exclude`, so they never show up in the project's pending changes.
 - **Syncs automatically** — pulls from your GitHub repo on project open and window focus. No manual steps.
-- **Protects your Intellectual Property** — your AI setup lives in your own private repository, syncs automatically into each project, and is excluded from git. Your instructions never touch a client's codebase.
-- **Supports every tool** — any file-based AI config works out of the box (Claude Code, Copilot, Cursor, and more). Custom path mappings cover anything else.
-- **Protects local edits** — detects local edits and prompts per file, with a built-in diff viewer before anything is overwritten.
-- **Maps paths flexibly** — translate any repo path to the local path a tool expects (e.g. `Claude/` → `.claude/`), or map a whole subfolder to your project root with `"projectA": "/"`.
-- **Handles deletions safely** — files removed from the repo or excluded by a settings change are removed locally; your local edits are protected, and emptied directories are cleaned up.
-- **Stays out of git** — synced files are added to `.git/info/exclude` so they never clutter your pending changes. Edit one locally and it surfaces automatically so you can see the diff.
+- **Works with any file-based AI config** — Claude Code, Copilot, Cursor, Codex, and Antigravity out of the box. Path mappings translate any repo path to the local path a tool expects (e.g. `Claude/` → `.claude/`), or map a whole subfolder to your project root.
+- **Never loses your work** — local edits are detected and prompted per file, with a built-in diff, before anything is overwritten. Deletions propagate the same way: silently when a file is untouched, with a prompt when you've edited it.
 - **Works across parallel agent sessions** — synced configs are automatically available in every Claude Code and Codex worktree, so AI tools have your setup no matter which isolated session they run in.
 - **Supports private, SSO, and Enterprise Server repos** — GitHub token stored securely in the OS keychain (VS Code SecretStorage).
-- **Fully configurable** — choose the branch and which folders to sync.
-- **One-click status bar** — a status-bar item shows sync state and opens an action menu (Sync Now, Show Log, Open Settings, Remove Synced Files, Set GitHub Token); larger syncs show a live progress notification.
 - **Runs your build step** — an optional post-sync command turns synced templates into finished configs (generate, inject secrets, merge), only in trusted workspaces.
 
 ## Requirements
 
 - **VS Code 1.125** or later.
-- **A GitHub repository** containing your shared AI setup files — public, private, SAML SSO org, or hosted on GitHub Enterprise Server.
+- **A GitHub repository** containing your shared AI setup files — personal or org, public or private, including SAML SSO orgs and repos hosted on GitHub Enterprise Server.
 - **For private, SSO-protected, or Enterprise Server repos:** a GitHub **classic** personal access token with the **`repo`** scope.
 
 ## Quick start
@@ -78,9 +49,32 @@ That's it for public repos. For private repos, SSO-protected orgs, or Enterprise
 
 > **New here?** Open a project before configuring anything and AI Setup Sync prompts you, with a shortcut to the repository setting.
 
+---
+
+## Contents
+
+Everything below is reference — jump to what you need:
+
+- [Setting up your repository](#setting-up-your-repository)
+- [Default synced paths](#default-synced-paths)
+- [Settings](#settings)
+- [Path mappings and multi-project repos](#path-mappings-and-multi-project-repos)
+- [Post-sync command](#post-sync-command)
+- [Conflict handling](#conflict-handling)
+- [Status bar](#status-bar)
+- [Commands](#commands)
+- [How files stay out of git](#how-files-stay-out-of-git)
+- [Removing synced files](#removing-synced-files)
+- [FAQ](#faq)
+- [Support](#support)
+
+---
+
 ## Setting up your repository
 
-The extension syncs from any GitHub repository you own.
+The extension syncs from any GitHub repository you can read — your own, your org's, or any public
+one. This section is the full version of [Quick start](#quick-start); if you've already set
+`aiSetupSync.repository`, skip to step 3.
 
 **1. Create a repository** and add your setup files on your default branch (`main` or `master`).
 Any combination of tools works — just place files where each tool expects them.
@@ -169,10 +163,16 @@ Configure via `aiSetupSync.targetFolders` — toggle defaults on or off, or add 
 | `aiSetupSync.repository` | *(required)* | GitHub repository URL to sync from, e.g. `https://github.com/your-org/your-repo`. GitHub Enterprise Server is also supported (e.g. `https://github.company.com/your-org/your-repo`). Private repos, SAML SSO orgs, and Enterprise Server repos need a token — see [Setting up your repository](#setting-up-your-repository). Set in workspace settings, it's only used in [trusted workspaces](https://code.visualstudio.com/docs/editor/workspace-trust); set it in **user** settings to sync regardless of trust. |
 | `aiSetupSync.branch` | `main` | Branch to sync from. Set to `master` or any other branch if your repo uses a different default. Like `repository`, a workspace-level value is only honored in trusted workspaces. |
 | `aiSetupSync.targetFolders` | *(see above)* | Files and folders to sync from the repo root. Each entry can be toggled on or off — set to `false` to disable a default without removing it. Add entries for any tool that reads config from your project. |
-| `aiSetupSync.pathMappings` | `{}` | Rename paths as files sync from the repo to your project. `"Claude": ".claude"` rewrites `Claude/instructions/style.md` → `.claude/instructions/style.md`. Use `"/"` to map a subfolder to your project root: `"projectA": "/"` syncs `projectA/.github/` as `.github/`. See [Path mappings & multi-project repos](#path-mappings--multi-project-repos) for how overlaps are resolved. |
+| `aiSetupSync.pathMappings` | `{}` | Rename paths as files sync from the repo to your project. `"Claude": ".claude"` rewrites `Claude/instructions/style.md` → `.claude/instructions/style.md`. Use `"/"` to map a subfolder to your project root: `"projectA": "/"` syncs `projectA/.github/` as `.github/`. See [Path mappings and multi-project repos](#path-mappings-and-multi-project-repos) for how overlaps are resolved. |
 | `aiSetupSync.postSyncCommand` | *(empty)* | Shell command to run after a sync changes files — e.g. generate configs from synced templates. Runs **only in trusted workspaces**. See [Post-sync command](#post-sync-command). |
 
-## Path mappings & multi-project repos
+**Multi-root workspaces** — every folder syncs, each with its own conflict tracking and its own
+`.git/info/exclude`, and a failure in one folder doesn't stop the others. `repository`, `branch`,
+`targetFolders`, and `pathMappings` apply to the whole window, so every folder syncs from the same
+repository — you can't point one folder at a different repo. `postSyncCommand` is the exception:
+set it per folder, and each command runs in the folder it's configured for.
+
+## Path mappings and multi-project repos
 
 Path mappings rewrite a repo path to a different local path as files sync. Reach for them when your
 repo's layout doesn't match what your tools expect at the project root — for example, when setup
@@ -381,7 +381,7 @@ Every action is available from the status-bar **action menu** and from the comma
 | Action | Description |
 | --- | --- |
 | **Sync Now** | Sync immediately. |
-| **Run Post Sync Command** | Run the configured [post-sync command](#post-sync-command) without waiting for a sync. Shown only when one is set. |
+| **Run Post Sync Command** | Run the configured [post-sync command](#post-sync-command) without waiting for a sync. The status-bar menu lists it only when one is configured. |
 | **Show Log** | Open the **AI Setup Sync** output channel. |
 | **Open Settings** | Open the extension's settings. |
 | **Remove Synced Files** | Delete synced files from the project (local edits are preserved). |
@@ -426,12 +426,13 @@ The patterns mirror your sync configuration:
 
 ## Removing synced files
 
-Run **Remove Synced Files** before uninstalling for an immediate cleanup. The extension also runs a
-cleanup hook on uninstall, but it fires only after a full VS Code restart.
+Run **Remove Synced Files** before uninstalling for an immediate cleanup — it confirms first, so
+it can't fire by accident. The extension also runs a cleanup hook on uninstall, but that fires only
+after a full VS Code restart.
 
 Only files whose content matches what the extension last wrote are removed — files you edited
 locally are kept so no work is lost. If any files are kept, a warning toast appears with a
-**Show details** button that lists them in the **AI Setup Sync** output channel.
+**Show Log** button that lists them in the **AI Setup Sync** output channel.
 
 Cleanup also strips the managed block from `.git/info/exclude` and removes `.worktreeinclude`, so
 once nothing is synced no trace of the extension is left in your repository.
@@ -439,11 +440,11 @@ once nothing is synced no trace of the extension is left in your repository.
 ## FAQ
 
 **When does it sync?**
-Automatically: when you open a project, when you return focus to the VS Code window (throttled so
-rapid window-switching doesn't re-sync), and shortly after you change a relevant setting or set a
-GitHub token. You can also sync on demand any time with **Sync Now** — from the status-bar action
-menu or the command palette. There's no schedule to configure — it just stays current at the
-moments you're working.
+Automatically: when you open a project, when you return focus to the VS Code window (at most once
+every 10 minutes, so alt-tabbing doesn't re-sync), and shortly after you change a relevant setting
+or set a GitHub token. **Sync Now** — from the status-bar action menu or the command palette —
+syncs on demand and ignores the throttle. There's no schedule to configure; it just stays current
+at the moments you're working.
 
 **Does it ever modify files I created myself?**
 No. The extension only touches files it synced from the repo. Anything else in your project is left
@@ -460,15 +461,21 @@ Fine-grained personal access tokens don't support the `repo` scope this extensio
 **Where is my token stored?**
 In the OS keychain via VS Code's SecretStorage — never in settings, files, or the repo.
 
-**Can I sync from a private or SSO-protected repo?**
-Yes — add a GitHub token; see [Setting up your repository](#setting-up-your-repository).
-
-**Does it support GitHub Enterprise Server?**
-Yes. Set `aiSetupSync.repository` to your Enterprise Server repo URL (e.g. `https://github.company.com/your-org/your-repo`); it always requires a token — see [Setting up your repository](#setting-up-your-repository).
+**Can I sync from a private, SSO-protected, or GitHub Enterprise Server repo?**
+Yes to all three — each needs a GitHub token; see
+[Setting up your repository](#setting-up-your-repository). For Enterprise Server, set
+`aiSetupSync.repository` to the full server URL (e.g. `https://github.company.com/your-org/your-repo`).
 
 **Will it work across a whole team?**
 That's the point. Everyone installs the extension and points at the same repo; merge a change and it
 reaches every project on the next sync.
+
+## Support
+
+Bug reports, questions, and feature requests go to
+[GitHub Issues](https://github.com/olekpuchka/ai-setup-sync/issues). Include your extension and VS
+Code versions plus the relevant output from the **AI Setup Sync** channel (Output panel →
+dropdown) — it logs every decision the sync made, and it never logs your token.
 
 ## License
 

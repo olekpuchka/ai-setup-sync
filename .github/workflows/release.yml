@@ -30,12 +30,8 @@ jobs:
         working-directory: extension
         run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
 
-      - name: Publish to VS Code Marketplace
-        working-directory: extension
-        env:
-          VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
-        run: npx vsce publish -p "$VSCE_TOKEN"
-
+      # Runs before publishing: a Marketplace version can never be republished, so a bad or
+      # missing CHANGELOG section must fail the run while it is still recoverable.
       - name: Extract release notes from CHANGELOG
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -48,6 +44,12 @@ jobs:
             echo "ERROR: No CHANGELOG entry found for version $VERSION" >&2
             exit 1
           fi
+
+      - name: Publish to VS Code Marketplace
+        working-directory: extension
+        env:
+          VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
+        run: npx vsce publish -p "$VSCE_TOKEN"
 
       - name: Create GitHub Release
         env:
