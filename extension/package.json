@@ -2,7 +2,7 @@
   "name": "ai-setup-sync",
   "displayName": "AI Setup Sync",
   "description": "Syncs AI setup files and MCP configs (Claude Code, Copilot, Cursor, Codex, Antigravity and more) from a GitHub repo into every project automatically.",
-  "version": "1.8.3",
+  "version": "1.8.4",
   "publisher": "olekpuchka",
   "author": {
     "name": "Olek Puchka"
@@ -95,13 +95,13 @@
           "order": 1,
           "type": "string",
           "default": "",
-          "markdownDescription": "GitHub repository URL to sync setup files from, e.g. `https://github.com/your-org/your-repo`. GitHub Enterprise Server URLs are also supported. Private repos, SSO orgs, and Enterprise Server require a **classic** token with the `repo` scope — [Set GitHub Token](command:aiSetupSync.setGitHubToken)."
+          "markdownDescription": "GitHub repository URL to sync setup files from, e.g. `https://github.com/your-org/your-repo`. GitHub Enterprise Server URLs are also supported. Private repos, SAML SSO orgs, and Enterprise Server repos require a **classic** token with the `repo` scope — [Set GitHub Token](command:aiSetupSync.setGitHubToken)."
         },
         "aiSetupSync.branch": {
           "order": 2,
           "type": "string",
           "default": "main",
-          "markdownDescription": "Branch to sync setup files from. Defaults to `main` — set to `master` or any other branch name if your repo uses a different default."
+          "markdownDescription": "Branch to sync setup files from. Change this if your repo's default branch isn't `main`."
         },
         "aiSetupSync.targetFolders": {
           "order": 3,
@@ -123,7 +123,7 @@
             "AGENTS.md": true,
             ".antigravity.md": true
           },
-          "markdownDescription": "Files and folders to sync from the repo root. Toggle entries on or off, or add custom paths for any tool that reads config from your project. Defaults cover Claude Code, GitHub Copilot, Cursor, OpenAI Codex, and Google Antigravity, including their MCP configs."
+          "markdownDescription": "Files and folders to sync from the repo root. Toggle entries on or off, or add paths for any other tool that reads config from your project."
         },
         "aiSetupSync.pathMappings": {
           "order": 4,
@@ -132,14 +132,14 @@
             "type": "string"
           },
           "default": {},
-          "markdownDescription": "Rename paths as files are synced from the repo to your project. `\"Claude\": \".claude\"` rewrites `Claude/instructions/style.md` → `.claude/instructions/style.md`. More specific (longer) keys always win. Leave empty if your repo already uses the paths AI tools expect. [Learn more](https://github.com/olekpuchka/ai-setup-sync/blob/main/extension/README.md#settings)"
+          "markdownDescription": "Rename paths as files sync from the repo to your project. `\"Claude\": \".claude\"` rewrites `Claude/instructions/style.md` → `.claude/instructions/style.md`. More specific (longer) keys always win. [Learn more](https://github.com/olekpuchka/ai-setup-sync/blob/main/extension/README.md#path-mappings-and-multi-project-repos)"
         },
         "aiSetupSync.postSyncCommand": {
           "order": 5,
           "type": "string",
           "scope": "resource",
           "default": "",
-          "markdownDescription": "Shell command to run after a sync changes files — e.g. `npm run generate` to build configs from synced templates. Runs only in [trusted workspaces](https://code.visualstudio.com/docs/editor/workspace-trust); output goes to the **AI Setup Sync** log. Leave empty to disable."
+          "markdownDescription": "Shell command to run after a sync changes files — e.g. `npm run generate` to build configs from synced templates. Runs only in [trusted workspaces](https://code.visualstudio.com/docs/editor/workspace-trust). Output goes to the **AI Setup Sync** log."
         }
       }
     }

@@ -76,7 +76,7 @@ The extension syncs from any GitHub repository you can read — your own, your o
 one. This section is the full version of [Quick start](#quick-start); if you've already set
 `aiSetupSync.repository`, skip to step 3.
 
-**1. Create a repository** and add your setup files on your default branch (`main` or `master`).
+**1. Create a repository** and add your setup files on your default branch.
 Any combination of tools works — just place files where each tool expects them.
 
 ```
@@ -126,7 +126,7 @@ command palette. [Create a **classic** personal access token](https://github.com
 with the **`repo`** scope (fine-grained tokens don't support this scope). For SAML SSO orgs, also
 authorize it for your org (*Settings → Personal access tokens → Configure SSO → Authorize*).
 
-**5. Set the branch if it isn't `main`** — set `aiSetupSync.branch` to match (e.g. `master`).
+**5. Set the branch if your default branch isn't `main`** — set `aiSetupSync.branch` to match.
 
 **6. Push and you're done.** Every project picks up the change the next time it's opened or refocused.
 
@@ -161,8 +161,8 @@ Configure via `aiSetupSync.targetFolders` — toggle defaults on or off, or add 
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `aiSetupSync.repository` | *(required)* | GitHub repository URL to sync from, e.g. `https://github.com/your-org/your-repo`. GitHub Enterprise Server is also supported (e.g. `https://github.company.com/your-org/your-repo`). Private repos, SAML SSO orgs, and Enterprise Server repos need a token — see [Setting up your repository](#setting-up-your-repository). Set in workspace settings, it's only used in [trusted workspaces](https://code.visualstudio.com/docs/editor/workspace-trust); set it in **user** settings to sync regardless of trust. |
-| `aiSetupSync.branch` | `main` | Branch to sync from. Set to `master` or any other branch if your repo uses a different default. Like `repository`, a workspace-level value is only honored in trusted workspaces. |
-| `aiSetupSync.targetFolders` | *(see above)* | Files and folders to sync from the repo root. Each entry can be toggled on or off — set to `false` to disable a default without removing it. Add entries for any tool that reads config from your project. |
+| `aiSetupSync.branch` | `main` | Branch to sync from. Change this if your repo's default branch isn't `main`. Like `repository`, a workspace-level value is only honored in trusted workspaces. |
+| `aiSetupSync.targetFolders` | *(see above)* | Files and folders to sync from the repo root. Each entry can be toggled on or off — set to `false` to disable a default without removing it. Add entries for any other tool that reads config from your project. |
 | `aiSetupSync.pathMappings` | `{}` | Rename paths as files sync from the repo to your project. `"Claude": ".claude"` rewrites `Claude/instructions/style.md` → `.claude/instructions/style.md`. Use `"/"` to map a subfolder to your project root: `"projectA": "/"` syncs `projectA/.github/` as `.github/`. See [Path mappings and multi-project repos](#path-mappings-and-multi-project-repos) for how overlaps are resolved. |
 | `aiSetupSync.postSyncCommand` | *(empty)* | Shell command to run after a sync changes files — e.g. generate configs from synced templates. Runs **only in trusted workspaces**. See [Post-sync command](#post-sync-command). |
 
@@ -186,6 +186,10 @@ files live under per-project or per-platform subfolders, or under names like `Cl
 | Rename a folder | `"Claude": ".claude"` | [Setting up your repository](#setting-up-your-repository) |
 | Sync one subfolder's contents to your project root | `"projectA": "/"` | [Map a whole subfolder](#map-a-whole-subfolder-to-the-workspace-root) |
 | Pull only specific subpaths from a multi-project repo | `"PlatformA/.claude": ".claude"` | [Map individual subpaths](#map-individual-subpaths) |
+
+When two keys both match a repo path, the more specific (longer) one wins — with
+`{"projectA": "/", "projectA/.claude": ".config/claude"}`, files under `projectA/.claude/` follow the
+second mapping and everything else under `projectA/` follows the first.
 
 ### Map a whole subfolder to the workspace root
 

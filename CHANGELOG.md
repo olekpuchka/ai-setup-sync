@@ -4,6 +4,15 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.8.4] — 2026-08-15
+
+### Changed
+
+- **Shorter settings descriptions** — the `branch`, `targetFolders`, `pathMappings`, and `postSyncCommand` descriptions no longer restate what the settings UI already shows. `branch` dropped its "defaults to `main`" clause, which the input field displays anyway; `targetFolders` dropped the list of covered tools, which the defaults table renders directly beneath it; and `postSyncCommand` and `pathMappings` dropped their "leave empty to disable" sentences.
+- **Documented mapping precedence** — when two `aiSetupSync.pathMappings` keys both match a repo path, the more specific (longer) key wins. This has always been the behavior but appeared nowhere in the README; it is now explained with a worked example, and the setting's **Learn more** link points at that section instead of the settings table.
+
+---
+
 ## [1.8.3] — 2026-08-02
 
 ### Fixed
