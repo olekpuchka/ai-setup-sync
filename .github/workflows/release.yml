@@ -1,7 +1,12 @@
 name: Release extension
 
-# Push a v* tag to publish the extension to the VS Code Marketplace:
+# Push a v* tag to publish the extension to the VS Code Marketplace and Open VSX (the
+# registry Cursor and other VS Code forks install from):
 #   git tag v0.1.0 && git push origin v0.1.0
+#
+# Open VSX has one-time setup outside this workflow: the publishing account must have signed
+# the Eclipse Publisher Agreement, and the `olekpuchka` namespace must exist
+# (`npx ovsx create-namespace olekpuchka -p <token>`). Both are already done.
 on:
   push:
     tags:
@@ -13,6 +18,7 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
 
@@ -45,16 +51,67 @@ jobs:
             exit 1
           fi
 
+      # Same reason as the CHANGELOG check: verify both tokens before anything irreversible
+      # happens, not after the Marketplace publish has burned the version. Deliberate
+      # trade-off: this makes either registry being unreachable block the release, which is
+      # preferable to shipping to one registry and discovering the other rejects the token.
+      - name: Verify publishing tokens
+        working-directory: extension
+        env:
+          OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
+          VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
+        run: |
+          # Both CLIs fall back to an interactive password prompt when -p is empty, and that
+          # prompt does not error on EOF — it would hang the job to the timeout instead of
+          # failing here, after the Marketplace publish has already burned the version.
+          for name in VSCE_TOKEN OVSX_TOKEN; do
+            if [ -z "${!name}" ]; then
+              echo "ERROR: $name secret is missing or empty" >&2
+              exit 1
+            fi
+          done
+          npx vsce verify-pat olekpuchka -p "$VSCE_TOKEN"
+          npx ovsx verify-pat olekpuchka -p "$OVSX_TOKEN"
+
+      # Packaged once and published to both registries, so both listings get the same build
+      # rather than two independent ones.
+      - name: Package extension
+        working-directory: extension
+        run: npx vsce package --no-dependencies --out ai-setup-sync.vsix
+
       - name: Publish to VS Code Marketplace
         working-directory: extension
         env:
           VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
-        run: npx vsce publish -p "$VSCE_TOKEN"
+          RETRY_FLAGS: ${{ github.run_attempt > 1 && '--skip-duplicate' || '' }}
+        run: npx vsce publish --packagePath ai-setup-sync.vsix $RETRY_FLAGS -p "$VSCE_TOKEN"
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
-            --notes-file /tmp/release-notes.md
+          if [ "$RUN_ATTEMPT" -gt 1 ] && gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            # The release exists but its asset upload may be what failed, so re-upload rather
+            # than skip — `gh release create` attaches assets only after creating the release.
+            # A re-run rebuilds the VSIX, so this may replace it with an equivalent build.
+            echo "Release $GITHUB_REF_NAME already created by an earlier attempt, re-uploading the VSIX."
+            gh release upload "$GITHUB_REF_NAME" extension/ai-setup-sync.vsix --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file /tmp/release-notes.md \
+              extension/ai-setup-sync.vsix
+          fi
+
+      # Cursor and the other VS Code forks install from Open VSX, not the Marketplace. Runs
+      # last so a hiccup in the newest, least-proven registry cannot cost the GitHub Release
+      # after the Marketplace has already burned the version. Every publishing step is
+      # re-run safe, so "Re-run failed jobs" resumes here; the VSIX is also attached to the
+      # GitHub Release, which is what to publish by hand when backfilling one registry.
+      - name: Publish to Open VSX
+        working-directory: extension
+        env:
+          OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
+          RETRY_FLAGS: ${{ github.run_attempt > 1 && '--skip-duplicate' || '' }}
+        run: npx ovsx publish ai-setup-sync.vsix $RETRY_FLAGS -p "$OVSX_TOKEN"

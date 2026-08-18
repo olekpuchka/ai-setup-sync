@@ -164,5 +164,7 @@ npm run vsce:package
 ## Versioning and releases
 
 Releases are built automatically by CI on `v*` tag pushes. The pipeline publishes to the VS Code
-Marketplace, extracts the matching `CHANGELOG.md` section as release notes, and creates a GitHub
-Release. Only the maintainer cuts releases — you don't need to bump the version in your PR.
+Marketplace, extracts the matching `CHANGELOG.md` section as release notes, creates a GitHub
+Release with the `.vsix` attached, and publishes to [Open VSX](https://open-vsx.org/extension/olekpuchka/ai-setup-sync)
+(the registry Cursor, Windsurf, and VSCodium install from). Only the maintainer cuts releases — you
+don't need to bump the version in your PR.

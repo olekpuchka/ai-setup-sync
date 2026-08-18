@@ -42,6 +42,9 @@ those edits and lets you choose what to keep, so no work is ever silently overwr
 ## Quick start
 
 1. Install **AI Setup Sync** from the VS Code Marketplace (or the Install button on this page).
+   On Cursor, Windsurf, or VSCodium, install it from
+   [Open VSX](https://open-vsx.org/extension/olekpuchka/ai-setup-sync) instead — those editors
+   cannot install from the Marketplace.
 2. Set `aiSetupSync.repository` to your GitHub repository URL in VS Code **user** settings.
 3. Open a project — sync runs automatically.
 

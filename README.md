@@ -37,8 +37,9 @@ project you're working in.
 
 ## Install
 
-1. Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=olekpuchka.ai-setup-sync)
-   (or search **AI Setup Sync** in the Extensions view).
+1. Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=olekpuchka.ai-setup-sync),
+   or from [Open VSX](https://open-vsx.org/extension/olekpuchka/ai-setup-sync) for Cursor, Windsurf,
+   and VSCodium (or search **AI Setup Sync** in the Extensions view).
 2. Set `aiSetupSync.repository` to your GitHub repository URL in VS Code **user** settings.
 3. Open a project — sync runs automatically.
 

@@ -4,6 +4,15 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.8.5] — 2026-08-18
+
+### Added
+
+- **Available on Open VSX** — the extension is now published to [Open VSX](https://open-vsx.org/extension/olekpuchka/ai-setup-sync) alongside the VS Code Marketplace, so it installs in Cursor, Windsurf, and VSCodium. Those editors cannot install from the Marketplace, which left them with no path to the extension other than a manual `.vsix` sideload. Both install routes are now documented in the README.
+- **Each release carries its `.vsix`** — the packaged extension is attached to its GitHub Release, so a specific version can be sideloaded directly.
+
+---
+
 ## [1.8.4] — 2026-08-15
 
 ### Changed
