@@ -2,7 +2,7 @@
   "name": "ai-setup-sync",
   "displayName": "AI Setup Sync",
   "description": "Syncs AI setup files and MCP configs (Claude Code, Copilot, Cursor, Codex, Antigravity and more) from a GitHub repo into every project automatically.",
-  "version": "1.8.5",
+  "version": "1.8.6",
   "publisher": "olekpuchka",
   "author": {
     "name": "Olek Puchka"
@@ -158,8 +158,8 @@
   "devDependencies": {
     "@types/node": "24.x",
     "@types/vscode": "1.125.0",
-    "@vscode/vsce": "^3.0.0",
-    "ovsx": "^1.1.1",
+    "@vscode/vsce": "^4.0.0",
+    "ovsx": "^1.2.0",
     "typescript": "^7.0.2"
   }
 }

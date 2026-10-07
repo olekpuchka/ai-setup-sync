@@ -14,6 +14,23 @@ export function acquireSync(): void {
   syncing = true;
 }
 
+const releaseListeners = new Set<() => void>();
+
+/** Calls `listener` each time the lock is released. Returns an unsubscribe function. */
+export function onSyncReleased(listener: () => void): () => void {
+  releaseListeners.add(listener);
+  return () => releaseListeners.delete(listener);
+}
+
 export function releaseSync(): void {
   syncing = false;
+  // Callers release in a `finally`, so a throwing listener would mask their own error and
+  // skip the listeners after it.
+  for (const listener of releaseListeners) {
+    try {
+      listener();
+    } catch {
+      /* a listener's failure must not affect the release */
+    }
+  }
 }

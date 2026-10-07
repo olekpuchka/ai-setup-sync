@@ -4,6 +4,20 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.8.6] — 2026-10-07
+
+### Fixed
+
+- **Updated files no longer show up as untracked after a large sync** — file changes noticed while a sync was running were judged against the previous sync's file list, so files the sync had just updated could look locally edited and be dropped from `.git/info/exclude`, appearing in `git status` until the next change. Changes seen during a sync or a Post Sync Command are now evaluated once it finishes, against the files it wrote.
+- **Edits made during a sync now surface in Source Control** — editing a synced file while a sync or Post Sync Command was running could leave it hidden from `git status` until it was edited again.
+
+### Changed
+
+- **Less work per synced file** — files are hashed without first being copied in memory, and large batches of downloads and disk checks no longer slow down as the file count grows.
+- **Updated build tooling** — `@vscode/vsce` 4 and `ovsx` 1.2, plus fixes for development-only dependency advisories. Nothing in the installed extension changes.
+
+---
+
 ## [1.8.5] — 2026-08-18
 
 ### Added

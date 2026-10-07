@@ -8,10 +8,12 @@ import * as crypto from "crypto";
  * so recomputing it on disk lets us compare a local file to its remote version
  * without downloading the remote content.
  */
-export function gitBlobSha(content: Buffer): string {
-  const header = Buffer.from(`blob ${content.length}\0`, "utf8");
+export function gitBlobSha(content: Uint8Array): string {
+  // Two update() calls hash the same bytes as one over the concatenation, without copying
+  // the file into a new buffer.
   return crypto
     .createHash("sha1")
-    .update(Buffer.concat([header, content]))
+    .update(`blob ${content.length}\0`, "utf8")
+    .update(content)
     .digest("hex");
 }

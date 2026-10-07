@@ -29,19 +29,20 @@ export class PartialSyncError extends Error {
 
 /** Runs `fn` over `items` with at most `limit` concurrent executions. Throws if any item fails. */
 async function parallelLimit<T>(
-  items: T[],
+  items: readonly T[],
   limit: number,
   fn: (item: T) => Promise<void>
 ): Promise<void> {
-  const queue = items.slice();
+  // A shared cursor rather than queue.shift(), which is O(n) per item on a large array.
+  let next = 0;
   const errors: unknown[] = [];
   // A rate limit (or auth failure) won't clear within this run — stop pulling new
   // items once one occurs rather than churning through every remaining file. Workers
   // already mid-request finish; no new requests are started.
   let aborted = false;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (queue.length > 0 && !aborted) {
-      const item = queue.shift()!;
+    while (next < items.length && !aborted) {
+      const item = items[next++];
       try {
         await fn(item);
       } catch (err) {
@@ -211,16 +212,29 @@ function validateRepoPath(p: string): void {
   }
 }
 
+/** Downloads a repo file and writes it to a workspace-relative path, creating parent dirs. */
+async function writeRepoFile(
+  repoRef: RepoRef,
+  root: vscode.Uri,
+  repoPath: string,
+  localPath: string
+): Promise<void> {
+  const bytes = await getRawFile(repoRef, repoPath);
+  const fileUri = vscode.Uri.joinPath(root, localPath);
+  await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(fileUri, ".."));
+  await vscode.workspace.fs.writeFile(fileUri, bytes);
+}
+
 /** Outcome of reading a file, keeping "not there" distinct from "there but unreadable". */
 type FileProbe =
   | { kind: "missing" }
-  | { kind: "read"; content: Buffer }
+  | { kind: "read"; content: Uint8Array }
   | { kind: "unreadable"; reason: string };
 
 async function probeFile(uri: vscode.Uri): Promise<FileProbe> {
   try {
     const bytes = await vscode.workspace.fs.readFile(uri);
-    return { kind: "read", content: Buffer.from(bytes) };
+    return { kind: "read", content: bytes };
   } catch (err) {
     if (err instanceof vscode.FileSystemError && err.code === "FileNotFound") {
       return { kind: "missing" };
@@ -236,7 +250,7 @@ async function probeFile(uri: vscode.Uri): Promise<FileProbe> {
  * Where content drives an overwrite, delete, or untrack, use probeFile or readMergeBase and
  * handle "unreadable" explicitly, or a permission error reads as a deleted file.
  */
-async function readIfExists(uri: vscode.Uri): Promise<Buffer | undefined> {
+async function readIfExists(uri: vscode.Uri): Promise<Uint8Array | undefined> {
   const probe = await probeFile(uri);
   return probe.kind === "read" ? probe.content : undefined;
 }
@@ -377,11 +391,7 @@ export async function syncFolder(
     if (missing.length > 0) {
       let done = 0;
       await parallelLimit(missing, DOWNLOAD_CONCURRENCY, async ({ repoPath, localPath }) => {
-        const bytes = await getRawFile(repoRef, repoPath);
-        const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, localPath);
-        const parentUri = vscode.Uri.joinPath(fileUri, "..");
-        await vscode.workspace.fs.createDirectory(parentUri);
-        await vscode.workspace.fs.writeFile(fileUri, bytes);
+        await writeRepoFile(repoRef, workspaceFolder.uri, repoPath, localPath);
         options.onProgress?.(++done, missing.length);
       });
       addedCount = missing.length;
@@ -429,11 +439,7 @@ export async function syncFolder(
       // Always write files the user approved, even if they escaped on a later file.
       let done = 0;
       await parallelLimit(toOverwrite, DOWNLOAD_CONCURRENCY, async (p) => {
-        const bytes = await getRawFile(repoRef, p.entry.path);
-        const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, p.localPath);
-        const parentUri = vscode.Uri.joinPath(fileUri, "..");
-        await vscode.workspace.fs.createDirectory(parentUri);
-        await vscode.workspace.fs.writeFile(fileUri, bytes);
+        await writeRepoFile(repoRef, workspaceFolder.uri, p.entry.path, p.localPath);
         delete newAcknowledged[p.entry.path];
         options.onProgress?.(++done, toOverwrite.length);
       });
@@ -707,11 +713,7 @@ export async function syncFolder(
   try {
     let writeProgress = 0;
     await parallelLimit(toWrite, DOWNLOAD_CONCURRENCY, async (p) => {
-      const bytes = await getRawFile(repoRef, p.entry.path);
-      const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, p.localPath);
-      const parentUri = vscode.Uri.joinPath(fileUri, "..");
-      await vscode.workspace.fs.createDirectory(parentUri);
-      await vscode.workspace.fs.writeFile(fileUri, bytes);
+      await writeRepoFile(repoRef, workspaceFolder.uri, p.entry.path, p.localPath);
       options.onProgress?.(++writeProgress, toWrite.length);
       // The tree API already returned the blob SHA, so don't recompute it.
       newState.files[p.entry.path] = p.entry.sha;
@@ -952,7 +954,10 @@ async function readMergeBase(uri: vscode.Uri, label: string): Promise<string | u
     log(`Warning: ${label} exists but could not be read — leaving it untouched.`);
     return undefined;
   }
-  return probe.kind === "read" ? probe.content.toString("utf8") : "";
+  // A Buffer view decodes in place; unlike TextDecoder it keeps a leading BOM, so a rewrite
+  // preserves the file byte-for-byte outside our block.
+  const c = probe.kind === "read" ? probe.content : undefined;
+  return c ? Buffer.from(c.buffer, c.byteOffset, c.byteLength).toString("utf8") : "";
 }
 
 /** True when the folder is a plain git repo (a `.git` directory, not a worktree file). */

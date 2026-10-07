@@ -109,6 +109,9 @@ their own message.
 drops a file from the block as soon as its content diverges from what was last synced, which makes
 the edit visible in Source Control without any manual step. Watch globs deliberately over-match —
 the handler filters — because under-matching would leave a locally edited file hidden from git.
+Events go through one queue per folder and are judged against the watcher state current *when they
+run*. Events that arrive while the sync lock is held are deferred and replayed on release, so they
+are never compared with SHAs the sync is about to replace.
 
 ## Testing your changes
 
