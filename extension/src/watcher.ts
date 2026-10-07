@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { gitBlobSha } from "./blobSha";
 import { log } from "./output";
-import { applyGitExclude } from "./sync";
+import { applyGitExclude, forgetHash } from "./sync";
 import { isSyncing, onSyncReleased } from "./syncLock";
 
 // Detects edits to managed files and removes them from .git/info/exclude so they surface
@@ -149,6 +149,9 @@ async function evaluateChange(folder: vscode.WorkspaceFolder, uri: vscode.Uri): 
 }
 
 function queueChange(folder: vscode.WorkspaceFolder, uri: vscode.Uri): void {
+  // Immediately, not when the event is evaluated: a sync probing in the meantime must not trust
+  // a hash taken before this change.
+  forgetHash(uri);
   const key = folder.uri.fsPath;
   const next = (pendingByFolder.get(key) ?? Promise.resolve())
     .then(() => evaluateChange(folder, uri))

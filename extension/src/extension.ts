@@ -4,7 +4,7 @@ import { ConfigError, RateLimitError, RepoRef } from "./github";
 import { initOutput, log, showOutput } from "./output";
 import { readRegistry, setWorkspaceFiles } from "./registry";
 import { getState, saveState } from "./state";
-import { localizeStateFiles, toastSummary, syncFolder, PartialSyncError } from "./sync";
+import { localizeStateFiles, toastSummary, syncFolder, PartialSyncError, withIgnoreFileLock } from "./sync";
 import { REMOTE_SCHEME, remoteContentProvider } from "./remoteContent";
 import { deleteToken, getToken, getTokenHost, setToken } from "./token";
 import { CONFIG, inspectRepository, readSettings } from "./settings";
@@ -388,7 +388,8 @@ async function runSync(
             const files =
               reg.workspaces[folder.uri.fsPath]?.files ??
               localizeStateFiles(prevState.files, settings.pathMappings);
-            const removed = removeManagedFiles(folder.uri.fsPath, files);
+            // Cleanup rewrites .git/info/exclude and .worktreeinclude too, so it queues with the other writers.
+            const removed = await withIgnoreFileLock(folder, () => removeManagedFiles(folder.uri.fsPath, files));
             if (removed.keptPaths.length > 0) {
               log(`Kept ${removed.keptPaths.length} file(s) with local edits during repo change:`);
               for (const rel of removed.keptPaths) {
@@ -516,11 +517,18 @@ async function runSync(
   }
 }
 
+const BUSY_MESSAGE = "AI Setup Sync: a sync or command is running — try again when it finishes.";
+
 /** Removes the synced setup files from the open workspace(s), preserving local edits. */
 async function removeSyncedFiles(context: vscode.ExtensionContext): Promise<void> {
   const folders = vscode.workspace.workspaceFolders ?? [];
   if (folders.length === 0) {
     void vscode.window.showInformationMessage("AI Setup Sync: Open a folder first — there's nowhere to sync files to.");
+    return;
+  }
+  // Checked before the confirmation too, so the user isn't asked to confirm something that can't run.
+  if (isSyncing()) {
+    void vscode.window.showInformationMessage(BUSY_MESSAGE);
     return;
   }
   const confirm = await vscode.window.showWarningMessage(
@@ -531,7 +539,25 @@ async function removeSyncedFiles(context: vscode.ExtensionContext): Promise<void
   if (confirm !== "Remove") {
     return;
   }
+  // Take the sync lock like every other writer: a concurrent sync would re-add what this removes,
+  // and the watcher defers its events while the lock is held instead of re-adding the exclude
+  // block cleanup just stripped.
+  if (isSyncing()) {
+    void vscode.window.showInformationMessage(BUSY_MESSAGE);
+    return;
+  }
+  acquireSync();
+  try {
+    await removeSyncedFilesLocked(context, folders);
+  } finally {
+    releaseSync();
+  }
+}
 
+async function removeSyncedFilesLocked(
+  context: vscode.ExtensionContext,
+  folders: readonly vscode.WorkspaceFolder[]
+): Promise<void> {
   const settings = readSettings();
   const reg = readRegistry();
   const allKeptPaths: Array<{ folder: vscode.WorkspaceFolder; rel: string }> = [];
@@ -546,7 +572,8 @@ async function removeSyncedFiles(context: vscode.ExtensionContext): Promise<void
     if (!files || Object.keys(files).length === 0) {
       continue;
     }
-    const summary = removeManagedFiles(folder.uri.fsPath, files);
+    // Cleanup rewrites .git/info/exclude and .worktreeinclude too, so it queues with the other writers.
+    const summary = await withIgnoreFileLock(folder, () => removeManagedFiles(folder.uri.fsPath, files));
     for (const rel of summary.keptPaths) {
       allKeptPaths.push({ folder, rel });
     }

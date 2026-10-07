@@ -4,6 +4,19 @@ All notable changes to the **AI Setup Sync** extension are documented here.
 
 ---
 
+## [1.8.7] — 2026-10-07
+
+### Fixed
+
+- **`.git/info/exclude` can no longer lose an update** — the file watcher, a sync, and Remove Synced Files each rewrite the managed block by reading the file, changing it, and writing it back. When two overlapped, the later write could silently undo the earlier one, re-hiding an edited file or leaving entries for files that no longer exist. These writes now run one at a time per folder.
+- **Remove Synced Files no longer runs during a sync** — it could race a sync writing the same files. It now says a sync is running and asks you to try again, before asking for confirmation.
+
+### Changed
+
+- **Syncs that find nothing to do no longer read every file** — each sync used to read and hash every synced file to check for local edits, even when nothing had changed. Files untouched since they were last checked are now recognized from their size and timestamps; any change the extension sees, and every file in a new VS Code session, is still read in full. A file is never overwritten without asking based on this shortcut alone — it is re-read first.
+
+---
+
 ## [1.8.6] — 2026-10-07
 
 ### Fixed

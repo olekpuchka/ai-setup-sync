@@ -113,6 +113,17 @@ Events go through one queue per folder and are judged against the watcher state 
 run*. Events that arrive while the sync lock is held are deferred and replayed on release, so they
 are never compared with SHAs the sync is about to replace.
 
+**Ignore-file writes** — `.git/info/exclude` and `.worktreeinclude` are read-modify-write, and the
+watcher, the sync, and cleanup all write them. Every write goes through `withIgnoreFileLock`
+(`sync.ts`), a per-folder queue, so one writer's read can never predate another's write. A new
+writer of either file must go through it too.
+
+**Hash cache** — `probeHashed` (`sync.ts`) skips re-reading a file whose size and timestamps are
+unchanged since it was last hashed this session. That is only safe because the watcher evicts a
+file's entry on every change it sees (`forgetHash`); the cache is in memory, so a new session
+reads everything. A cached SHA never authorizes an unprompted overwrite on its own — the
+full-tree path re-reads those files first.
+
 ## Testing your changes
 
 There is no automated test suite; changes are verified by hand in the Extension Development Host.

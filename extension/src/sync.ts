@@ -258,8 +258,101 @@ async function readIfExists(uri: vscode.Uri): Promise<Uint8Array | undefined> {
 /** A probe reduced to its git blob SHA — see probeAll. */
 type HashedProbe =
   | { kind: "missing" }
-  | { kind: "read"; sha: string }
+  /** `cached`: the SHA came from the hash cache rather than a read — see probeHashed. */
+  | { kind: "read"; sha: string; cached?: boolean }
   | { kind: "unreadable"; reason: string };
+
+/**
+ * A file's stat and blob SHA from when it was last hashed this session. Lets a sync skip
+ * reading files that haven't changed — the common case, since most syncs find nothing to do.
+ */
+interface HashCacheEntry {
+  size: number;
+  mtime: number;
+  /** Changes when a tool replaces the file rather than rewriting it (rsync, tar, editors' safe-save). */
+  ctime: number;
+  sha: string;
+  /** Local clock time just before the content was read. */
+  hashedAt: number;
+}
+
+/**
+ * Keyed by fsPath, the one spelling the watcher's event URIs and Uri.joinPath agree on. The
+ * watcher evicts an entry on every change to its file (see forgetHash), so the cache only ever
+ * vouches for files untouched since they were hashed — which is what makes a stat match safe to
+ * trust despite same-size, same-mtime rewrites and clock skew. In memory only: a new session
+ * reads everything once, so edits made while VS Code was closed are always seen.
+ */
+const hashCache = new Map<string, HashCacheEntry>();
+
+/**
+ * On case-insensitive filesystems the watcher reports the on-disk spelling, which can differ from
+ * the repo's (`claude.md` vs `CLAUDE.md`) — fold case there so its evictions always hit. On a
+ * case-sensitive macOS volume this only over-evicts, which costs a read, never correctness.
+ */
+const hashKey =
+  process.platform === "darwin" || process.platform === "win32"
+    ? (uri: vscode.Uri) => uri.fsPath.toLowerCase()
+    : (uri: vscode.Uri) => uri.fsPath;
+
+/**
+ * A file written within this long of being hashed may be rewritten without its mtime visibly
+ * changing (coarse timestamps: FAT and some network filesystems round to 2s), so its cached
+ * SHA isn't trusted until a later hash. The same "racy" rule git applies to its index.
+ */
+const RACY_MTIME_MS = 2000;
+
+/**
+ * probeFile reduced to a SHA, reusing the cached SHA when the file's size and mtime are unchanged.
+ * The stat is taken before the read, so a write landing between the two leaves the cache keyed
+ * to the older mtime and the next probe reads again.
+ *
+ * A cached SHA can still be stale — a same-size edit that keeps the old mtime (`cp -p`, a restore,
+ * clock skew on a network mount defeating the racy rule). That's tolerable where the SHA only
+ * decides "nothing to do" or "ask the user", but never where it would authorize overwriting the
+ * file unprompted: callers re-probe with `fresh` before that.
+ */
+async function probeHashed(uri: vscode.Uri, fresh = false): Promise<HashedProbe> {
+  const key = hashKey(uri);
+  let stat: vscode.FileStat | undefined;
+  try {
+    const s = await vscode.workspace.fs.stat(uri);
+    // mtime 0 means the provider doesn't report one, so it can't vouch for unchanged content.
+    stat = s.type & vscode.FileType.File && s.mtime > 0 ? s : undefined;
+  } catch {
+    // Leave missing vs unreadable to probeFile, which tells them apart.
+  }
+  const cached = hashCache.get(key);
+  if (
+    !fresh &&
+    stat &&
+    cached &&
+    cached.size === stat.size &&
+    cached.mtime === stat.mtime &&
+    cached.ctime === stat.ctime &&
+    stat.mtime < cached.hashedAt - RACY_MTIME_MS
+  ) {
+    return { kind: "read", sha: cached.sha, cached: true };
+  }
+  const hashedAt = Date.now();
+  const probe = await probeFile(uri);
+  if (probe.kind !== "read") {
+    hashCache.delete(key);
+    return probe;
+  }
+  const sha = gitBlobSha(probe.content);
+  if (stat) {
+    hashCache.set(key, { size: stat.size, mtime: stat.mtime, ctime: stat.ctime, sha, hashedAt });
+  } else {
+    hashCache.delete(key);
+  }
+  return { kind: "read", sha };
+}
+
+/** Drops a file's cached hash. The watcher calls this for every change it sees. */
+export function forgetHash(uri: vscode.Uri): void {
+  hashCache.delete(hashKey(uri));
+}
 
 /**
  * Probes every item's localPath concurrently, returning results zipped back in input
@@ -277,8 +370,7 @@ async function probeAll<T extends { localPath: string }>(
     items.map((item, i) => ({ item, i })),
     DISK_CONCURRENCY,
     async ({ item, i }) => {
-      const probe = await probeFile(vscode.Uri.joinPath(root, item.localPath));
-      probes[i] = probe.kind === "read" ? { kind: "read", sha: gitBlobSha(probe.content) } : probe;
+      probes[i] = await probeHashed(vscode.Uri.joinPath(root, item.localPath));
     }
   );
   return items.map((item, i) => [item, probes[i]]);
@@ -574,10 +666,24 @@ export async function syncFolder(
   // entry keeps its acknowledgement and the tree ETag isn't cached over the pending update.
   const unreadableLocalPaths = new Set<string>();
   const unreadableRepoPaths: string[] = [];
-  for (const [{ entry, localPath, fromMapping }, probe] of await probeAll(
-    workspaceFolder.uri,
-    [...winners.values()]
-  )) {
+  const lastSyncedFor = (entry: TreeEntry, localPath: string): string | undefined =>
+    state.files[entry.path] ?? stateByLocalPath.get(localPath);
+  const probed = await probeAll(workspaceFolder.uri, [...winners.values()]);
+  // A cached SHA that would classify a file as a safe-update — overwritten without asking — is
+  // confirmed against the actual content first rather than trusted.
+  const toConfirm = probed
+    .map(([winner, probe], i) => ({ winner, probe, i }))
+    .filter(
+      ({ winner, probe }) =>
+        probe.kind === "read" &&
+        probe.cached &&
+        probe.sha !== winner.entry.sha &&
+        probe.sha === lastSyncedFor(winner.entry, winner.localPath)
+    );
+  await parallelLimit(toConfirm, DISK_CONCURRENCY, async ({ winner, i }) => {
+    probed[i] = [winner, await probeHashed(vscode.Uri.joinPath(workspaceFolder.uri, winner.localPath), true)];
+  });
+  for (const [{ entry, localPath, fromMapping }, probe] of probed) {
     if (probe.kind === "unreadable") {
       unreadableLocalPaths.add(localPath);
       unreadableRepoPaths.push(entry.path);
@@ -593,7 +699,7 @@ export async function syncFolder(
       plannedMap.set(localPath, { entry, localPath, classification: "up-to-date", fromMapping });
       continue;
     }
-    const lastSynced = state.files[entry.path] ?? stateByLocalPath.get(localPath);
+    const lastSynced = lastSyncedFor(entry, localPath);
     if (lastSynced && lastSynced === localSha) {
       // On disk matches what we wrote last time → user didn't touch it.
       plannedMap.set(localPath, { entry, localPath, classification: "safe-update", fromMapping });
@@ -960,6 +1066,34 @@ async function readMergeBase(uri: vscode.Uri, label: string): Promise<string | u
   return c ? Buffer.from(c.buffer, c.byteOffset, c.byteLength).toString("utf8") : "";
 }
 
+/** Per-folder tail of the ignore-file write queue; see withIgnoreFileLock. */
+const ignoreFileWrites = new Map<string, Promise<void>>();
+
+/**
+ * Runs `fn` after every earlier ignore-file write for this folder has settled. Writes to
+ * `.git/info/exclude` and `.worktreeinclude` are read-modify-write across several awaits, and
+ * the watcher, the sync, and cleanup all make them — unserialized, one writer's read could
+ * predate another's write, and the later write would silently undo the earlier one.
+ */
+export function withIgnoreFileLock<T>(
+  workspaceFolder: vscode.WorkspaceFolder,
+  fn: () => T | Promise<T>
+): Promise<T> {
+  const key = workspaceFolder.uri.toString();
+  const run = (ignoreFileWrites.get(key) ?? Promise.resolve()).then(fn);
+  const tail = run.then(
+    () => {},
+    () => {}
+  );
+  ignoreFileWrites.set(key, tail);
+  void tail.then(() => {
+    if (ignoreFileWrites.get(key) === tail) {
+      ignoreFileWrites.delete(key);
+    }
+  });
+  return run;
+}
+
 /** True when the folder is a plain git repo (a `.git` directory, not a worktree file). */
 async function isPlainGitRepo(workspaceFolder: vscode.WorkspaceFolder): Promise<boolean> {
   try {
@@ -981,7 +1115,15 @@ async function isPlainGitRepo(workspaceFolder: vscode.WorkspaceFolder): Promise<
  * `excludePaths`: locally-modified files are deliberately left out of the exclude block, so a
  * project whose every managed file is modified still has a `.worktreeinclude` to hide.
  */
-export async function applyGitExclude(
+export function applyGitExclude(
+  workspaceFolder: vscode.WorkspaceFolder,
+  excludePaths: string[],
+  anyManaged: boolean
+): Promise<void> {
+  return withIgnoreFileLock(workspaceFolder, () => writeGitExclude(workspaceFolder, excludePaths, anyManaged));
+}
+
+async function writeGitExclude(
   workspaceFolder: vscode.WorkspaceFolder,
   excludePaths: string[],
   anyManaged: boolean
@@ -1028,7 +1170,18 @@ export async function applyGitExclude(
  * `applyGitExclude` adds `.worktreeinclude` to the exclude list, so it never shows up
  * as an untracked change.
  */
-async function applyWorktreeInclude(
+function applyWorktreeInclude(
+  workspaceFolder: vscode.WorkspaceFolder,
+  managedPaths: string[],
+  targetFolders: string[],
+  pathMappings: Record<string, string>
+): Promise<void> {
+  return withIgnoreFileLock(workspaceFolder, () =>
+    writeWorktreeInclude(workspaceFolder, managedPaths, targetFolders, pathMappings)
+  );
+}
+
+async function writeWorktreeInclude(
   workspaceFolder: vscode.WorkspaceFolder,
   managedPaths: string[],
   targetFolders: string[],
